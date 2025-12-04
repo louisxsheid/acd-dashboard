@@ -8,14 +8,28 @@
     RECENT_TOWERS,
     PROVIDERS_WITH_STATS,
     BAND_DISTRIBUTION,
+    TOWERS_IN_BOUNDS,
+    TOWER_GROWTH,
+    DATA_FRESHNESS,
+    SIGNAL_STATS,
+    CARRIER_BANDS,
   } from "./lib/graphql/queries";
   import StatCard from "./lib/components/StatCard.svelte";
   import BarChart from "./lib/components/BarChart.svelte";
   import ProvidersTable from "./lib/components/ProvidersTable.svelte";
   import RecentTowers from "./lib/components/RecentTowers.svelte";
+  import TowerMap from "./lib/components/TowerMap.svelte";
+  import TimelineChart from "./lib/components/TimelineChart.svelte";
+  import SignalStats from "./lib/components/SignalStats.svelte";
+  import DataFreshness from "./lib/components/DataFreshness.svelte";
+  import CarrierBands from "./lib/components/CarrierBands.svelte";
 
   setContextClient(client);
 
+  type Tab = "dashboard" | "map" | "analytics";
+  let activeTab: Tab = $state("dashboard");
+
+  // Dashboard queries
   const statsQuery = queryStore({ client, query: DASHBOARD_STATS });
   const ratQuery = queryStore({ client, query: TOWERS_BY_RAT });
   const typeQuery = queryStore({ client, query: TOWERS_BY_TYPE });
@@ -27,6 +41,48 @@
   const providersQuery = queryStore({ client, query: PROVIDERS_WITH_STATS });
   const bandQuery = queryStore({ client, query: BAND_DISTRIBUTION });
 
+  // Analytics queries
+  const growthQuery = queryStore({ client, query: TOWER_GROWTH });
+  const freshnessQuery = queryStore({ client, query: DATA_FRESHNESS });
+  const signalQuery = queryStore({ client, query: SIGNAL_STATS });
+  const carrierBandsQuery = queryStore({ client, query: CARRIER_BANDS });
+
+  // Map state
+  let mapBounds = $state({
+    minLat: 24.396308,
+    maxLat: 49.384358,
+    minLng: -125.0,
+    maxLng: -66.93457,
+  });
+  let mapTowers: any[] = $state([]);
+  let mapTotalCount = $state(0);
+  let mapLoading = $state(false);
+
+  async function loadMapTowers() {
+    mapLoading = true;
+    try {
+      const result = await client.query(TOWERS_IN_BOUNDS, {
+        ...mapBounds,
+        limit: 5000,
+        rat: null,
+        provider_id: null,
+      }).toPromise();
+
+      if (result.data) {
+        mapTowers = result.data.towers || [];
+        mapTotalCount = result.data.towers_aggregate?.aggregate?.count || 0;
+      }
+    } finally {
+      mapLoading = false;
+    }
+  }
+
+  function handleBoundsChange(bounds: typeof mapBounds) {
+    mapBounds = bounds;
+    loadMapTowers();
+  }
+
+  // Derived data for charts
   let ratData = $derived(
     $ratQuery.data
       ? [
@@ -69,6 +125,45 @@
         ]
       : []
   );
+
+  let growthData = $derived(
+    $growthQuery.data
+      ? [
+          { label: "<2020", count: $growthQuery.data.before2020?.aggregate?.count || 0, color: "#52525b" },
+          { label: "2020", count: $growthQuery.data.y2020?.aggregate?.count || 0, color: "#71717a" },
+          { label: "2021", count: $growthQuery.data.y2021?.aggregate?.count || 0, color: "#3b82f6" },
+          { label: "2022", count: $growthQuery.data.y2022?.aggregate?.count || 0, color: "#8b5cf6" },
+          { label: "2023", count: $growthQuery.data.y2023?.aggregate?.count || 0, color: "#22c55e" },
+          { label: "2024", count: $growthQuery.data.y2024?.aggregate?.count || 0, color: "#f59e0b" },
+          { label: "2025", count: $growthQuery.data.y2025?.aggregate?.count || 0, color: "#ec4899" },
+        ]
+      : []
+  );
+
+  let freshnessData = $derived(
+    $freshnessQuery.data
+      ? [
+          { label: "Last 24h", count: $freshnessQuery.data.last_24h?.aggregate?.count || 0, color: "#22c55e" },
+          { label: "Last 7 days", count: $freshnessQuery.data.last_7d?.aggregate?.count || 0, color: "#3b82f6" },
+          { label: "Last 30 days", count: $freshnessQuery.data.last_30d?.aggregate?.count || 0, color: "#8b5cf6" },
+          { label: "Last 90 days", count: $freshnessQuery.data.last_90d?.aggregate?.count || 0, color: "#f59e0b" },
+          { label: "Last year", count: $freshnessQuery.data.last_year?.aggregate?.count || 0, color: "#f97316" },
+          { label: "Older", count: $freshnessQuery.data.older?.aggregate?.count || 0, color: "#71717a" },
+        ]
+      : []
+  );
+
+  let carrierBandsData = $derived(
+    $carrierBandsQuery.data?.providers?.map((p: any) => ({
+      country_id: p.country_id,
+      provider_id: p.provider_id,
+      b2: p.b2?.aggregate?.count || 0,
+      b4: p.b4?.aggregate?.count || 0,
+      b12: p.b12?.aggregate?.count || 0,
+      b13: p.b13?.aggregate?.count || 0,
+      b14: p.b14?.aggregate?.count || 0,
+    })) || []
+  );
 </script>
 
 <main>
@@ -77,18 +172,32 @@
       <h1>ACD Dashboard</h1>
       <p class="subtitle">Aerocell Data - Cell Tower Analytics</p>
     </div>
-    <div class="header-meta">
-      {#if $statsQuery.data}
-        <span class="last-updated">
-          {new Date().toLocaleDateString("en-US", {
-            weekday: "short",
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          })}
-        </span>
-      {/if}
-    </div>
+    <nav class="tabs">
+      <button
+        class="tab"
+        class:active={activeTab === "dashboard"}
+        onclick={() => (activeTab = "dashboard")}
+      >
+        Overview
+      </button>
+      <button
+        class="tab"
+        class:active={activeTab === "map"}
+        onclick={() => {
+          activeTab = "map";
+          if (mapTowers.length === 0) loadMapTowers();
+        }}
+      >
+        Map
+      </button>
+      <button
+        class="tab"
+        class:active={activeTab === "analytics"}
+        onclick={() => (activeTab = "analytics")}
+      >
+        Analytics
+      </button>
+    </nav>
   </header>
 
   {#if $statsQuery.fetching}
@@ -103,66 +212,111 @@
       <code>{$statsQuery.error.message}</code>
     </div>
   {:else if $statsQuery.data}
-    <section class="stats-grid">
-      <StatCard
-        title="Total Towers"
-        value={$statsQuery.data.towers_aggregate?.aggregate?.count || 0}
-        icon="📡"
-        color="#3b82f6"
-      />
-      <StatCard
-        title="Total Cells"
-        value={$statsQuery.data.cells_aggregate?.aggregate?.count || 0}
-        icon="📶"
-        color="#8b5cf6"
-      />
-      <StatCard
-        title="Carriers"
-        value={$statsQuery.data.providers_aggregate?.aggregate?.count || 0}
-        icon="🏢"
-        color="#22c55e"
-      />
-      <StatCard
-        title="Band Records"
-        value={$statsQuery.data.tower_bands_aggregate?.aggregate?.count || 0}
-        icon="📊"
-        color="#f59e0b"
-      />
-      <StatCard
-        title="EN-DC Capable"
-        value={$statsQuery.data.endc_towers?.aggregate?.count || 0}
-        icon="⚡"
-        color="#ec4899"
-      />
-    </section>
+    {#if activeTab === "dashboard"}
+      <section class="stats-grid">
+        <StatCard
+          title="Total Towers"
+          value={$statsQuery.data.towers_aggregate?.aggregate?.count || 0}
+          icon="📡"
+          color="#3b82f6"
+        />
+        <StatCard
+          title="Total Cells"
+          value={$statsQuery.data.cells_aggregate?.aggregate?.count || 0}
+          icon="📶"
+          color="#8b5cf6"
+        />
+        <StatCard
+          title="Carriers"
+          value={$statsQuery.data.providers_aggregate?.aggregate?.count || 0}
+          icon="🏢"
+          color="#22c55e"
+        />
+        <StatCard
+          title="Band Records"
+          value={$statsQuery.data.tower_bands_aggregate?.aggregate?.count || 0}
+          icon="📊"
+          color="#f59e0b"
+        />
+        <StatCard
+          title="EN-DC Capable"
+          value={$statsQuery.data.endc_towers?.aggregate?.count || 0}
+          icon="⚡"
+          color="#ec4899"
+        />
+      </section>
 
-    <section class="charts-grid">
-      {#if !$ratQuery.fetching && ratData.length > 0}
-        <BarChart title="Towers by Technology (RAT)" data={ratData} />
-      {/if}
-
-      {#if !$typeQuery.fetching && typeData.length > 0}
-        <BarChart title="Towers by Type" data={typeData} />
-      {/if}
-
-      {#if !$bandQuery.fetching && bandData.length > 0}
-        <BarChart title="LTE Band Distribution" data={bandData} />
-      {/if}
-    </section>
-
-    <section class="main-content">
-      <div class="left-column">
-        {#if !$providersQuery.fetching && $providersQuery.data?.providers}
-          <ProvidersTable providers={$providersQuery.data.providers} />
+      <section class="charts-grid">
+        {#if !$ratQuery.fetching && ratData.length > 0}
+          <BarChart title="Towers by Technology (RAT)" data={ratData} />
         {/if}
-      </div>
 
-      <div class="right-column">
-        {#if !$recentQuery.fetching && $recentQuery.data?.towers}
-          <RecentTowers towers={$recentQuery.data.towers} title="Newest Towers Discovered" />
+        {#if !$typeQuery.fetching && typeData.length > 0}
+          <BarChart title="Towers by Type" data={typeData} />
         {/if}
-      </div>
-    </section>
+
+        {#if !$bandQuery.fetching && bandData.length > 0}
+          <BarChart title="LTE Band Distribution" data={bandData} />
+        {/if}
+      </section>
+
+      <section class="main-content">
+        <div class="left-column">
+          {#if !$providersQuery.fetching && $providersQuery.data?.providers}
+            <ProvidersTable providers={$providersQuery.data.providers} />
+          {/if}
+        </div>
+
+        <div class="right-column">
+          {#if !$recentQuery.fetching && $recentQuery.data?.towers}
+            <RecentTowers towers={$recentQuery.data.towers} title="Newest Towers Discovered" />
+          {/if}
+        </div>
+      </section>
+    {:else if activeTab === "map"}
+      <section class="map-section">
+        <TowerMap
+          towers={mapTowers}
+          totalCount={mapTotalCount}
+          loading={mapLoading}
+          onBoundsChange={handleBoundsChange}
+        />
+      </section>
+    {:else if activeTab === "analytics"}
+      <section class="analytics-section">
+        <div class="analytics-row">
+          {#if !$growthQuery.fetching && growthData.length > 0}
+            <TimelineChart title="Tower Discovery by Year" data={growthData} />
+          {/if}
+
+          {#if !$freshnessQuery.fetching && freshnessData.length > 0}
+            <DataFreshness data={freshnessData} />
+          {/if}
+        </div>
+
+        <div class="analytics-row">
+          {#if !$signalQuery.fetching && $signalQuery.data}
+            <SignalStats
+              signalAvg={$signalQuery.data.cells_aggregate?.aggregate?.avg?.signal}
+              signalMin={$signalQuery.data.cells_aggregate?.aggregate?.min?.signal}
+              signalMax={$signalQuery.data.cells_aggregate?.aggregate?.max?.signal}
+              avgDownload={$signalQuery.data.speed_stats?.aggregate?.avg?.avg_speed_down_mbps}
+              maxDownload={$signalQuery.data.speed_stats?.aggregate?.max?.max_speed_down_mbps}
+              avgUpload={$signalQuery.data.speed_stats?.aggregate?.avg?.avg_speed_up_mbps}
+              maxUpload={$signalQuery.data.speed_stats?.aggregate?.max?.max_speed_up_mbps}
+              avgSnr={$signalQuery.data.snr_stats?.aggregate?.avg?.lte_snr_max}
+              avgRsrq={$signalQuery.data.snr_stats?.aggregate?.avg?.lte_rsrq_max}
+            />
+          {/if}
+        </div>
+
+        <div class="analytics-row">
+          {#if !$carrierBandsQuery.fetching && carrierBandsData.length > 0}
+            <CarrierBands carriers={carrierBandsData} />
+          {/if}
+        </div>
+      </section>
+    {/if}
   {/if}
 </main>
 
@@ -198,6 +352,8 @@
     justify-content: space-between;
     align-items: flex-start;
     margin-bottom: 2rem;
+    flex-wrap: wrap;
+    gap: 1rem;
   }
 
   h1 {
@@ -213,13 +369,33 @@
     font-size: 1rem;
   }
 
-  .header-meta {
-    text-align: right;
+  .tabs {
+    display: flex;
+    gap: 0.5rem;
+    background: #1e1e2e;
+    padding: 0.375rem;
+    border-radius: 10px;
   }
 
-  .last-updated {
+  .tab {
+    padding: 0.625rem 1.25rem;
+    border: none;
+    background: transparent;
+    color: #a1a1aa;
     font-size: 0.875rem;
-    color: #52525b;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.2s;
+  }
+
+  .tab:hover {
+    color: #f4f4f5;
+  }
+
+  .tab.active {
+    background: #3b82f6;
+    color: white;
   }
 
   .loading {
@@ -302,6 +478,22 @@
     gap: 1.5rem;
   }
 
+  .map-section {
+    margin-bottom: 2rem;
+  }
+
+  .analytics-section {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .analytics-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 1.5rem;
+  }
+
   @media (max-width: 1200px) {
     .main-content {
       grid-template-columns: 1fr;
@@ -315,7 +507,7 @@
 
     header {
       flex-direction: column;
-      gap: 0.5rem;
+      gap: 1rem;
     }
 
     h1 {
@@ -327,6 +519,10 @@
     }
 
     .charts-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .analytics-row {
       grid-template-columns: 1fr;
     }
   }
