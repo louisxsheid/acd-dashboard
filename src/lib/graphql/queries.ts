@@ -199,15 +199,11 @@ export const TOWERS_IN_BOUNDS = gql`
     $minLng: float8!
     $maxLng: float8!
     $limit: Int!
-    $rat: String
-    $provider_id: Int
   ) {
     towers(
       where: {
         latitude: { _gte: $minLat, _lte: $maxLat }
         longitude: { _gte: $minLng, _lte: $maxLng }
-        rat: { _eq: $rat }
-        provider_id: { _eq: $provider_id }
       }
       limit: $limit
       order_by: { id: asc }
@@ -227,8 +223,6 @@ export const TOWERS_IN_BOUNDS = gql`
       where: {
         latitude: { _gte: $minLat, _lte: $maxLat }
         longitude: { _gte: $minLng, _lte: $maxLng }
-        rat: { _eq: $rat }
-        provider_id: { _eq: $provider_id }
       }
     ) {
       aggregate {

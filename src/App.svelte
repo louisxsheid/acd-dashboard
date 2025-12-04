@@ -26,7 +26,7 @@
 
   setContextClient(client);
 
-  type Tab = "dashboard" | "map" | "analytics";
+  type Tab = "dashboard" | "map";
   let activeTab: Tab = $state("dashboard");
 
   // Dashboard queries
@@ -64,8 +64,6 @@
       const result = await client.query(TOWERS_IN_BOUNDS, {
         ...mapBounds,
         limit: 5000,
-        rat: null,
-        provider_id: null,
       }).toPromise();
 
       if (result.data) {
@@ -178,7 +176,7 @@
         class:active={activeTab === "dashboard"}
         onclick={() => (activeTab = "dashboard")}
       >
-        Overview
+        Dashboard
       </button>
       <button
         class="tab"
@@ -189,13 +187,6 @@
         }}
       >
         Map
-      </button>
-      <button
-        class="tab"
-        class:active={activeTab === "analytics"}
-        onclick={() => (activeTab = "analytics")}
-      >
-        Analytics
       </button>
     </nav>
   </header>
@@ -213,6 +204,7 @@
     </div>
   {:else if $statsQuery.data}
     {#if activeTab === "dashboard"}
+      <!-- Stats Cards -->
       <section class="stats-grid">
         <StatCard
           title="Total Towers"
@@ -246,6 +238,7 @@
         />
       </section>
 
+      <!-- Distribution Charts -->
       <section class="charts-grid">
         {#if !$ratQuery.fetching && ratData.length > 0}
           <BarChart title="Towers by Technology (RAT)" data={ratData} />
@@ -258,6 +251,46 @@
         {#if !$bandQuery.fetching && bandData.length > 0}
           <BarChart title="LTE Band Distribution" data={bandData} />
         {/if}
+      </section>
+
+      <!-- Analytics Section -->
+      <section class="section-header">
+        <h2>Analytics</h2>
+      </section>
+
+      <section class="analytics-grid">
+        {#if !$growthQuery.fetching && growthData.length > 0}
+          <TimelineChart title="Tower Discovery by Year" data={growthData} />
+        {/if}
+
+        {#if !$freshnessQuery.fetching && freshnessData.length > 0}
+          <DataFreshness data={freshnessData} />
+        {/if}
+      </section>
+
+      <section class="analytics-grid">
+        {#if !$signalQuery.fetching && $signalQuery.data}
+          <SignalStats
+            signalAvg={$signalQuery.data.cells_aggregate?.aggregate?.avg?.signal}
+            signalMin={$signalQuery.data.cells_aggregate?.aggregate?.min?.signal}
+            signalMax={$signalQuery.data.cells_aggregate?.aggregate?.max?.signal}
+            avgDownload={$signalQuery.data.speed_stats?.aggregate?.avg?.avg_speed_down_mbps}
+            maxDownload={$signalQuery.data.speed_stats?.aggregate?.max?.max_speed_down_mbps}
+            avgUpload={$signalQuery.data.speed_stats?.aggregate?.avg?.avg_speed_up_mbps}
+            maxUpload={$signalQuery.data.speed_stats?.aggregate?.max?.max_speed_up_mbps}
+            avgSnr={$signalQuery.data.snr_stats?.aggregate?.avg?.lte_snr_max}
+            avgRsrq={$signalQuery.data.snr_stats?.aggregate?.avg?.lte_rsrq_max}
+          />
+        {/if}
+
+        {#if !$carrierBandsQuery.fetching && carrierBandsData.length > 0}
+          <CarrierBands carriers={carrierBandsData} />
+        {/if}
+      </section>
+
+      <!-- Carriers & Recent Section -->
+      <section class="section-header">
+        <h2>Carriers & Recent Activity</h2>
       </section>
 
       <section class="main-content">
@@ -281,40 +314,6 @@
           loading={mapLoading}
           onBoundsChange={handleBoundsChange}
         />
-      </section>
-    {:else if activeTab === "analytics"}
-      <section class="analytics-section">
-        <div class="analytics-row">
-          {#if !$growthQuery.fetching && growthData.length > 0}
-            <TimelineChart title="Tower Discovery by Year" data={growthData} />
-          {/if}
-
-          {#if !$freshnessQuery.fetching && freshnessData.length > 0}
-            <DataFreshness data={freshnessData} />
-          {/if}
-        </div>
-
-        <div class="analytics-row">
-          {#if !$signalQuery.fetching && $signalQuery.data}
-            <SignalStats
-              signalAvg={$signalQuery.data.cells_aggregate?.aggregate?.avg?.signal}
-              signalMin={$signalQuery.data.cells_aggregate?.aggregate?.min?.signal}
-              signalMax={$signalQuery.data.cells_aggregate?.aggregate?.max?.signal}
-              avgDownload={$signalQuery.data.speed_stats?.aggregate?.avg?.avg_speed_down_mbps}
-              maxDownload={$signalQuery.data.speed_stats?.aggregate?.max?.max_speed_down_mbps}
-              avgUpload={$signalQuery.data.speed_stats?.aggregate?.avg?.avg_speed_up_mbps}
-              maxUpload={$signalQuery.data.speed_stats?.aggregate?.max?.max_speed_up_mbps}
-              avgSnr={$signalQuery.data.snr_stats?.aggregate?.avg?.lte_snr_max}
-              avgRsrq={$signalQuery.data.snr_stats?.aggregate?.avg?.lte_rsrq_max}
-            />
-          {/if}
-        </div>
-
-        <div class="analytics-row">
-          {#if !$carrierBandsQuery.fetching && carrierBandsData.length > 0}
-            <CarrierBands carriers={carrierBandsData} />
-          {/if}
-        </div>
       </section>
     {/if}
   {/if}
@@ -453,7 +452,7 @@
 
   .stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 1.25rem;
     margin-bottom: 2rem;
   }
@@ -463,6 +462,26 @@
     grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
     gap: 1.5rem;
     margin-bottom: 2rem;
+  }
+
+  .section-header {
+    margin: 2.5rem 0 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid #27273a;
+  }
+
+  .section-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #f4f4f5;
+  }
+
+  .analytics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
   }
 
   .main-content {
@@ -482,20 +501,14 @@
     margin-bottom: 2rem;
   }
 
-  .analytics-section {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-  }
-
-  .analytics-row {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-    gap: 1.5rem;
-  }
-
   @media (max-width: 1200px) {
     .main-content {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 900px) {
+    .analytics-grid {
       grid-template-columns: 1fr;
     }
   }
@@ -519,10 +532,6 @@
     }
 
     .charts-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .analytics-row {
       grid-template-columns: 1fr;
     }
   }
