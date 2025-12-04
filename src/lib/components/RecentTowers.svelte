@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { getCarrierName, getCarrierColor } from "../carriers";
+
   interface Tower {
     id: number;
     external_id: string | null;
@@ -6,19 +8,26 @@
     tower_type: string | null;
     latitude: number;
     longitude: number;
+    first_seen_at: string | null;
     last_seen_at: string | null;
+    endc_available: boolean;
     provider: {
-      name: string | null;
       country_id: number;
       provider_id: number;
     } | null;
+    cells_aggregate: {
+      aggregate: {
+        count: number;
+      };
+    };
   }
 
   interface Props {
     towers: Tower[];
+    title?: string;
   }
 
-  let { towers }: Props = $props();
+  let { towers, title = "Newest Towers" }: Props = $props();
 
   function formatDate(dateStr: string | null): string {
     if (!dateStr) return "—";
@@ -28,6 +37,21 @@
       day: "numeric",
       year: "numeric",
     });
+  }
+
+  function timeAgo(dateStr: string | null): string {
+    if (!dateStr) return "";
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 0) return "today";
+    if (diffDays === 1) return "yesterday";
+    if (diffDays < 7) return `${diffDays}d ago`;
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+    if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+    return `${Math.floor(diffDays / 365)}y ago`;
   }
 
   function getRATColor(rat: string | null): string {
@@ -46,24 +70,67 @@
         return "#71717a";
     }
   }
+
+  function getTowerTypeIcon(type: string | null): string {
+    switch (type) {
+      case "MACRO":
+        return "📡";
+      case "MICRO":
+        return "📶";
+      case "PICO":
+        return "📱";
+      case "DAS":
+        return "🏢";
+      case "COW":
+        return "🚚";
+      case "DECOMMISSIONED":
+        return "🚫";
+      default:
+        return "📍";
+    }
+  }
 </script>
 
 <div class="recent-towers">
-  <h3>Recently Seen Towers</h3>
+  <h3>{title}</h3>
   <div class="towers-list">
     {#each towers as tower}
+      {@const carrierName = tower.provider
+        ? getCarrierName(tower.provider.country_id, tower.provider.provider_id)
+        : "Unknown"}
+      {@const carrierColor = tower.provider
+        ? getCarrierColor(tower.provider.country_id, tower.provider.provider_id)
+        : "#6b7280"}
       <div class="tower-item">
         <div class="tower-main">
-          <span class="rat-badge" style="background: {getRATColor(tower.rat)}">{tower.rat || "?"}</span>
+          <span class="tower-icon">{getTowerTypeIcon(tower.tower_type)}</span>
           <div class="tower-info">
-            <span class="tower-id">#{tower.id}</span>
-            <span class="tower-type">{tower.tower_type || "Unknown"}</span>
+            <div class="tower-header">
+              <span class="rat-badge" style="background: {getRATColor(tower.rat)}"
+                >{tower.rat || "?"}</span
+              >
+              <span class="tower-id">#{tower.id}</span>
+              {#if tower.endc_available}
+                <span class="endc-badge">EN-DC</span>
+              {/if}
+            </div>
+            <div class="tower-details">
+              <span class="tower-type">{tower.tower_type || "Unknown"}</span>
+              <span class="separator">•</span>
+              <span class="cells">{tower.cells_aggregate.aggregate.count} cells</span>
+            </div>
           </div>
         </div>
         <div class="tower-meta">
-          <span class="provider">{tower.provider?.name || "Unknown Provider"}</span>
-          <span class="coords">{tower.latitude.toFixed(4)}, {tower.longitude.toFixed(4)}</span>
-          <span class="date">{formatDate(tower.last_seen_at)}</span>
+          <div class="carrier" style="color: {carrierColor}">{carrierName}</div>
+          <div class="location">
+            {tower.latitude.toFixed(4)}, {tower.longitude.toFixed(4)}
+          </div>
+          <div class="dates">
+            <span class="date-label">First seen:</span>
+            <span class="date-value">{formatDate(tower.first_seen_at)}</span>
+            <span class="time-ago">({timeAgo(tower.first_seen_at)})</span>
+          </div>
         </div>
       </div>
     {/each}
@@ -87,17 +154,18 @@
   .towers-list {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0.75rem;
   }
 
   .tower-item {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    padding: 0.75rem;
+    align-items: flex-start;
+    padding: 1rem;
     background: #27273a;
     border-radius: 8px;
     transition: background 0.2s;
+    gap: 1rem;
   }
 
   .tower-item:hover {
@@ -106,22 +174,33 @@
 
   .tower-main {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 0.75rem;
   }
 
-  .rat-badge {
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: white;
+  .tower-icon {
+    font-size: 1.25rem;
+    line-height: 1;
   }
 
   .tower-info {
     display: flex;
     flex-direction: column;
-    gap: 0.125rem;
+    gap: 0.375rem;
+  }
+
+  .tower-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .rat-badge {
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: white;
   }
 
   .tower-id {
@@ -130,28 +209,62 @@
     color: #f4f4f5;
   }
 
-  .tower-type {
+  .endc-badge {
+    padding: 0.15rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    background: rgba(139, 92, 246, 0.2);
+    color: #a78bfa;
+  }
+
+  .tower-details {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
     font-size: 0.75rem;
     color: #a1a1aa;
+  }
+
+  .separator {
+    color: #52525b;
   }
 
   .tower-meta {
     display: flex;
-    align-items: center;
-    gap: 1rem;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.25rem;
     font-size: 0.75rem;
-    color: #71717a;
+    text-align: right;
   }
 
-  .provider {
+  .carrier {
+    font-weight: 500;
+  }
+
+  .location {
+    font-family: monospace;
+    color: #71717a;
+    font-size: 0.7rem;
+  }
+
+  .dates {
+    display: flex;
+    gap: 0.25rem;
+    color: #52525b;
+    font-size: 0.7rem;
+  }
+
+  .date-label {
+    color: #52525b;
+  }
+
+  .date-value {
     color: #a1a1aa;
   }
 
-  .coords {
-    font-family: monospace;
-  }
-
-  .date {
-    color: #52525b;
+  .time-ago {
+    color: #71717a;
   }
 </style>

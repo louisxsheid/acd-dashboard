@@ -22,6 +22,11 @@ export const DASHBOARD_STATS = gql`
         count
       }
     }
+    endc_towers: towers_aggregate(where: { endc_available: { _eq: true } }) {
+      aggregate {
+        count
+      }
+    }
   }
 `;
 
@@ -57,20 +62,32 @@ export const TOWERS_BY_RAT = gql`
 
 export const TOWERS_BY_TYPE = gql`
   query TowersByType {
-    towers(distinct_on: tower_type) {
-      tower_type
-    }
     macro: towers_aggregate(where: { tower_type: { _eq: "MACRO" } }) {
       aggregate {
         count
       }
     }
-    small: towers_aggregate(where: { tower_type: { _eq: "SMALL_CELL" } }) {
+    micro: towers_aggregate(where: { tower_type: { _eq: "MICRO" } }) {
       aggregate {
         count
       }
     }
-    indoor: towers_aggregate(where: { tower_type: { _eq: "INDOOR" } }) {
+    pico: towers_aggregate(where: { tower_type: { _eq: "PICO" } }) {
+      aggregate {
+        count
+      }
+    }
+    das: towers_aggregate(where: { tower_type: { _eq: "DAS" } }) {
+      aggregate {
+        count
+      }
+    }
+    cow: towers_aggregate(where: { tower_type: { _eq: "COW" } }) {
+      aggregate {
+        count
+      }
+    }
+    decommissioned: towers_aggregate(where: { tower_type: { _eq: "DECOMMISSIONED" } }) {
       aggregate {
         count
       }
@@ -80,25 +97,35 @@ export const TOWERS_BY_TYPE = gql`
 
 export const RECENT_TOWERS = gql`
   query RecentTowers($limit: Int!) {
-    towers(order_by: { last_seen_at: desc_nulls_last }, limit: $limit) {
+    towers(
+      order_by: { first_seen_at: desc_nulls_last }
+      limit: $limit
+      where: { first_seen_at: { _is_null: false } }
+    ) {
       id
       external_id
       rat
       tower_type
       latitude
       longitude
+      first_seen_at
       last_seen_at
+      endc_available
       provider {
-        name
         country_id
         provider_id
+      }
+      cells_aggregate {
+        aggregate {
+          count
+        }
       }
     }
   }
 `;
 
-export const PROVIDERS_LIST = gql`
-  query ProvidersList {
+export const PROVIDERS_WITH_STATS = gql`
+  query ProvidersWithStats {
     providers(order_by: { id: asc }) {
       id
       country_id
@@ -110,15 +137,16 @@ export const PROVIDERS_LIST = gql`
           count
         }
       }
-    }
-  }
-`;
-
-export const TOP_BANDS = gql`
-  query TopBands {
-    tower_bands(distinct_on: band_number, order_by: { band_number: asc }) {
-      band_number
-      band_name
+      lte_towers: towers_aggregate(where: { rat: { _eq: "LTE" } }) {
+        aggregate {
+          count
+        }
+      }
+      nr_towers: towers_aggregate(where: { rat: { _eq: "NR" } }) {
+        aggregate {
+          count
+        }
+      }
     }
   }
 `;
@@ -126,52 +154,92 @@ export const TOP_BANDS = gql`
 export const BAND_DISTRIBUTION = gql`
   query BandDistribution {
     b2: tower_bands_aggregate(where: { band_number: { _eq: 2 } }) {
-      aggregate { count }
+      aggregate {
+        count
+      }
     }
     b4: tower_bands_aggregate(where: { band_number: { _eq: 4 } }) {
-      aggregate { count }
+      aggregate {
+        count
+      }
     }
-    b7: tower_bands_aggregate(where: { band_number: { _eq: 7 } }) {
-      aggregate { count }
+    b5: tower_bands_aggregate(where: { band_number: { _eq: 5 } }) {
+      aggregate {
+        count
+      }
     }
     b12: tower_bands_aggregate(where: { band_number: { _eq: 12 } }) {
-      aggregate { count }
+      aggregate {
+        count
+      }
     }
     b13: tower_bands_aggregate(where: { band_number: { _eq: 13 } }) {
-      aggregate { count }
+      aggregate {
+        count
+      }
     }
     b14: tower_bands_aggregate(where: { band_number: { _eq: 14 } }) {
-      aggregate { count }
-    }
-    b25: tower_bands_aggregate(where: { band_number: { _eq: 25 } }) {
-      aggregate { count }
-    }
-    b26: tower_bands_aggregate(where: { band_number: { _eq: 26 } }) {
-      aggregate { count }
+      aggregate {
+        count
+      }
     }
     b30: tower_bands_aggregate(where: { band_number: { _eq: 30 } }) {
-      aggregate { count }
+      aggregate {
+        count
+      }
     }
-    b41: tower_bands_aggregate(where: { band_number: { _eq: 41 } }) {
-      aggregate { count }
+  }
+`;
+
+export const CELLS_BY_SUBSYSTEM = gql`
+  query CellsBySubsystem {
+    lte: cells_aggregate(where: { subsystem: { _eq: "LTE" } }) {
+      aggregate {
+        count
+      }
     }
-    b66: tower_bands_aggregate(where: { band_number: { _eq: 66 } }) {
-      aggregate { count }
+    lte_a: cells_aggregate(where: { subsystem: { _eq: "LTE-A" } }) {
+      aggregate {
+        count
+      }
     }
-    b71: tower_bands_aggregate(where: { band_number: { _eq: 71 } }) {
-      aggregate { count }
+    unknown: cells_aggregate(where: { subsystem: { _is_null: true } }) {
+      aggregate {
+        count
+      }
     }
-    n41: tower_bands_aggregate(where: { band_number: { _eq: 41 } }) {
-      aggregate { count }
+  }
+`;
+
+export const TOWER_ACTIVITY = gql`
+  query TowerActivity {
+    last_24h: towers_aggregate(
+      where: { last_seen_at: { _gte: "now() - interval '24 hours'" } }
+    ) {
+      aggregate {
+        count
+      }
     }
-    n71: tower_bands_aggregate(where: { band_number: { _eq: 71 } }) {
-      aggregate { count }
+    last_7d: towers_aggregate(
+      where: { last_seen_at: { _gte: "now() - interval '7 days'" } }
+    ) {
+      aggregate {
+        count
+      }
     }
-    n77: tower_bands_aggregate(where: { band_number: { _eq: 77 } }) {
-      aggregate { count }
+    last_30d: towers_aggregate(
+      where: { last_seen_at: { _gte: "now() - interval '30 days'" } }
+    ) {
+      aggregate {
+        count
+      }
     }
-    n78: tower_bands_aggregate(where: { band_number: { _eq: 78 } }) {
-      aggregate { count }
+    last_year: towers_aggregate(
+      where: { last_seen_at: { _gte: "now() - interval '1 year'" } }
+    ) {
+      aggregate {
+        count
+      }
     }
   }
 `;

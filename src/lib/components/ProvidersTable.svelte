@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { getCarrierName, getCarrierColor } from "../carriers";
+
   interface Provider {
     id: number;
     country_id: number;
@@ -10,6 +12,16 @@
         count: number;
       };
     };
+    lte_towers: {
+      aggregate: {
+        count: number;
+      };
+    };
+    nr_towers: {
+      aggregate: {
+        count: number;
+      };
+    };
   }
 
   interface Props {
@@ -17,31 +29,44 @@
   }
 
   let { providers }: Props = $props();
+
+  let sortedProviders = $derived(
+    [...providers].sort(
+      (a, b) => b.towers_aggregate.aggregate.count - a.towers_aggregate.aggregate.count
+    )
+  );
 </script>
 
 <div class="providers-table">
-  <h3>Providers</h3>
+  <h3>Carriers</h3>
   <div class="table-wrapper">
     <table>
       <thead>
         <tr>
-          <th>ID</th>
-          <th>Name</th>
-          <th>Country</th>
-          <th>Towers</th>
+          <th>Carrier</th>
+          <th>MCC-MNC</th>
+          <th class="right">Towers</th>
+          <th class="right">LTE</th>
+          <th class="right">5G NR</th>
           <th>Status</th>
         </tr>
       </thead>
       <tbody>
-        {#each providers as provider}
+        {#each sortedProviders as provider}
+          {@const carrierName = getCarrierName(provider.country_id, provider.provider_id)}
+          {@const carrierColor = getCarrierColor(provider.country_id, provider.provider_id)}
           <tr>
-            <td class="id">{provider.provider_id}</td>
-            <td class="name">{provider.name || "Unknown"}</td>
-            <td class="country">{provider.country_id}</td>
-            <td class="towers">{provider.towers_aggregate.aggregate.count.toLocaleString()}</td>
+            <td class="name">
+              <span class="carrier-dot" style="background: {carrierColor}"></span>
+              {carrierName}
+            </td>
+            <td class="mcc-mnc">{provider.country_id}-{provider.provider_id}</td>
+            <td class="towers right">{provider.towers_aggregate.aggregate.count.toLocaleString()}</td>
+            <td class="right">{provider.lte_towers.aggregate.count.toLocaleString()}</td>
+            <td class="right">{provider.nr_towers.aggregate.count.toLocaleString()}</td>
             <td>
               <span class="status" class:visible={provider.visible}>
-                {provider.visible ? "Visible" : "Hidden"}
+                {provider.visible ? "Active" : "Hidden"}
               </span>
             </td>
           </tr>
@@ -85,11 +110,20 @@
     border-bottom: 1px solid #27273a;
   }
 
+  th.right {
+    text-align: right;
+  }
+
   td {
     padding: 0.75rem;
     font-size: 0.875rem;
     color: #e4e4e7;
     border-bottom: 1px solid #27273a;
+  }
+
+  td.right {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
   }
 
   tr:last-child td {
@@ -100,13 +134,24 @@
     background: #27273a;
   }
 
-  .id {
-    font-family: monospace;
-    color: #a1a1aa;
-  }
-
   .name {
     font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .carrier-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .mcc-mnc {
+    font-family: monospace;
+    color: #71717a;
+    font-size: 0.8rem;
   }
 
   .towers {
