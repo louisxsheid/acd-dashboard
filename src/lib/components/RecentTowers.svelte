@@ -1,20 +1,34 @@
 <script lang="ts">
   import { getCarrierName, getCarrierColor } from "../carriers";
 
-  interface Tower {
+  interface TowerProvider {
     id: number;
     external_id: string | null;
     rat: string | null;
+    rat_subtype: string | null;
+    site_id: string | null;
+    region_id: string | null;
+    first_seen_at: string | null;
+    last_seen_at: string | null;
+    endc_available: boolean;
+    provider: {
+      id: number;
+      country_id: number;
+      provider_id: number;
+      name: string | null;
+    };
+  }
+
+  interface Tower {
+    id: number;
     tower_type: string | null;
     latitude: number;
     longitude: number;
     first_seen_at: string | null;
     last_seen_at: string | null;
     endc_available: boolean;
-    provider: {
-      country_id: number;
-      provider_id: number;
-    } | null;
+    provider_count: number;
+    tower_providers: TowerProvider[];
     cells_aggregate: {
       aggregate: {
         count: number;
@@ -28,6 +42,16 @@
   }
 
   let { towers, title = "Newest Towers" }: Props = $props();
+
+  // Get primary provider (first in list, sorted by last_seen_at desc)
+  function getPrimaryProvider(tower: Tower): TowerProvider | null {
+    return tower.tower_providers?.[0] ?? null;
+  }
+
+  // Get primary RAT from tower_providers
+  function getPrimaryRAT(tower: Tower): string | null {
+    return getPrimaryProvider(tower)?.rat ?? null;
+  }
 
   function formatDate(dateStr: string | null): string {
     if (!dateStr) return "—";
@@ -95,23 +119,28 @@
   <h3>{title}</h3>
   <div class="towers-list">
     {#each towers as tower}
-      {@const carrierName = tower.provider
-        ? getCarrierName(tower.provider.country_id, tower.provider.provider_id)
+      {@const primaryProvider = getPrimaryProvider(tower)}
+      {@const primaryRAT = getPrimaryRAT(tower)}
+      {@const carrierName = primaryProvider
+        ? getCarrierName(primaryProvider.provider.country_id, primaryProvider.provider.provider_id)
         : "Unknown"}
-      {@const carrierColor = tower.provider
-        ? getCarrierColor(tower.provider.country_id, tower.provider.provider_id)
+      {@const carrierColor = primaryProvider
+        ? getCarrierColor(primaryProvider.provider.country_id, primaryProvider.provider.provider_id)
         : "#6b7280"}
       <div class="tower-item">
         <div class="tower-main">
           <span class="tower-icon">{getTowerTypeIcon(tower.tower_type)}</span>
           <div class="tower-info">
             <div class="tower-header">
-              <span class="rat-badge" style="background: {getRATColor(tower.rat)}"
-                >{tower.rat || "?"}</span
+              <span class="rat-badge" style="background: {getRATColor(primaryRAT)}"
+                >{primaryRAT || "?"}</span
               >
               <span class="tower-id">#{tower.id}</span>
               {#if tower.endc_available}
                 <span class="endc-badge">EN-DC</span>
+              {/if}
+              {#if tower.provider_count > 1}
+                <span class="multi-provider-badge">{tower.provider_count} carriers</span>
               {/if}
             </div>
             <div class="tower-details">
@@ -216,6 +245,15 @@
     font-weight: 600;
     background: rgba(139, 92, 246, 0.2);
     color: #a78bfa;
+  }
+
+  .multi-provider-badge {
+    padding: 0.15rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    background: rgba(251, 191, 36, 0.2);
+    color: #fbbf24;
   }
 
   .tower-details {

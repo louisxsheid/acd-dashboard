@@ -9,20 +9,26 @@
     PROVIDERS_WITH_STATS,
     BAND_DISTRIBUTION,
     TOWERS_IN_BOUNDS,
+    TOWER_CLUSTERS_COARSE,
+    TOWER_CLUSTERS_MEDIUM,
+    TOWER_CLUSTERS_FINE,
     TOWER_GROWTH,
     DATA_FRESHNESS,
     SIGNAL_STATS,
     CARRIER_BANDS,
+    CARRIER_STATS,
   } from "./lib/graphql/queries";
   import StatCard from "./lib/components/StatCard.svelte";
   import BarChart from "./lib/components/BarChart.svelte";
   import ProvidersTable from "./lib/components/ProvidersTable.svelte";
   import RecentTowers from "./lib/components/RecentTowers.svelte";
-  import TowerMap from "./lib/components/TowerMap.svelte";
+  import DeckGLMap from "./lib/components/DeckGLMap.svelte";
+  import MapFilters from "./lib/components/MapFilters.svelte";
   import TimelineChart from "./lib/components/TimelineChart.svelte";
   import SignalStats from "./lib/components/SignalStats.svelte";
   import DataFreshness from "./lib/components/DataFreshness.svelte";
   import CarrierBands from "./lib/components/CarrierBands.svelte";
+  import CarrierStats from "./lib/components/CarrierStats.svelte";
 
   setContextClient(client);
 
@@ -46,6 +52,7 @@
   const freshnessQuery = queryStore({ client, query: DATA_FRESHNESS });
   const signalQuery = queryStore({ client, query: SIGNAL_STATS });
   const carrierBandsQuery = queryStore({ client, query: CARRIER_BANDS });
+  const carrierStatsQuery = queryStore({ client, query: CARRIER_STATS });
 
   // Map state
   let mapBounds = $state({
@@ -53,31 +60,91 @@
     maxLat: 49.384358,
     minLng: -125.0,
     maxLng: -66.93457,
+    zoom: 4,
   });
+  let mapClusters: any[] = $state([]);
   let mapTowers: any[] = $state([]);
   let mapTotalCount = $state(0);
   let mapLoading = $state(false);
+  let mapFilters = $state<{ rat: string[]; endc: boolean | null }>({
+    rat: [],
+    endc: null,
+  });
 
-  async function loadMapTowers() {
+  // Determine which cluster level to use based on zoom
+  // Switch to individual towers at city level (~zoom 9) for actual locations
+  function getClusterQuery(zoom: number) {
+    if (zoom >= 9) return null; // Individual towers - show actual locations at city level
+    if (zoom >= 6) return { query: TOWER_CLUSTERS_FINE, key: 'tower_clusters_fine' };
+    if (zoom >= 4) return { query: TOWER_CLUSTERS_MEDIUM, key: 'tower_clusters_medium' };
+    return { query: TOWER_CLUSTERS_COARSE, key: 'tower_clusters_coarse' };
+  }
+
+  async function loadMapData() {
+    console.log('loadMapData called with bounds:', mapBounds);
     mapLoading = true;
     try {
-      const result = await client.query(TOWERS_IN_BOUNDS, {
-        ...mapBounds,
-        limit: 5000,
-      }).toPromise();
+      const clusterConfig = getClusterQuery(mapBounds.zoom);
+      console.log('Using cluster config:', clusterConfig?.key || 'individual towers');
+      const vars = {
+        minLat: mapBounds.minLat,
+        maxLat: mapBounds.maxLat,
+        minLng: mapBounds.minLng,
+        maxLng: mapBounds.maxLng,
+      };
 
-      if (result.data) {
-        mapTowers = result.data.towers || [];
-        mapTotalCount = result.data.towers_aggregate?.aggregate?.count || 0;
+      if (clusterConfig) {
+        // Load clusters
+        console.log('Querying clusters with vars:', vars);
+        const result = await client.query(clusterConfig.query, vars).toPromise();
+        console.log('Cluster query result:', result);
+        if (result.error) {
+          console.error('Cluster query error:', result.error);
+        }
+        if (result.data) {
+          mapClusters = result.data[clusterConfig.key] || [];
+          mapTotalCount = result.data[`${clusterConfig.key}_aggregate`]?.aggregate?.sum?.tower_count || 0;
+          mapTowers = [];
+          console.log('Loaded clusters:', mapClusters.length, 'total:', mapTotalCount);
+        } else {
+          console.warn('No data in cluster result');
+        }
+      } else {
+        // Load individual towers at city level and above
+        const result = await client.query(TOWERS_IN_BOUNDS, {
+          ...vars,
+          limit: 10000, // Higher limit for city-level views
+        }).toPromise();
+        if (result.error) {
+          console.error('Towers query error:', result.error);
+        }
+        if (result.data) {
+          mapTowers = result.data.towers || [];
+          mapTotalCount = result.data.towers_aggregate?.aggregate?.count || 0;
+          mapClusters = [];
+          console.log('Loaded towers:', mapTowers.length, 'total:', mapTotalCount);
+        }
       }
+    } catch (err) {
+      console.error('loadMapData error:', err);
     } finally {
       mapLoading = false;
     }
   }
 
+  let loadTimeout: ReturnType<typeof setTimeout> | null = null;
+
   function handleBoundsChange(bounds: typeof mapBounds) {
     mapBounds = bounds;
-    loadMapTowers();
+    // Debounce to prevent too many requests while panning/zooming
+    if (loadTimeout) clearTimeout(loadTimeout);
+    loadTimeout = setTimeout(() => {
+      loadMapData();
+    }, 200);
+  }
+
+  function handleFilterChange(newFilters: typeof mapFilters) {
+    mapFilters = newFilters;
   }
 
   // Derived data for charts
@@ -183,7 +250,7 @@
         class:active={activeTab === "map"}
         onclick={() => {
           activeTab = "map";
-          if (mapTowers.length === 0) loadMapTowers();
+          if (mapTowers.length === 0 && mapClusters.length === 0) loadMapData();
         }}
       >
         Map
@@ -192,9 +259,14 @@
   </header>
 
   {#if $statsQuery.fetching}
-    <div class="loading">
-      <div class="spinner"></div>
-      <p>Loading dashboard data...</p>
+    <div class="loading-screen">
+      <div class="loading-content">
+        <h2 class="loading-title">ACD Dashboard</h2>
+        <p class="loading-subtitle">Loading cell tower analytics...</p>
+        <div class="loading-progress">
+          <div class="progress-bar"></div>
+        </div>
+      </div>
     </div>
   {:else if $statsQuery.error}
     <div class="error">
@@ -205,7 +277,7 @@
   {:else if $statsQuery.data}
     {#if activeTab === "dashboard"}
       <!-- Stats Cards -->
-      <section class="stats-grid">
+      <section class="stats-grid fade-in-up">
         <StatCard
           title="Total Towers"
           value={$statsQuery.data.towers_aggregate?.aggregate?.count || 0}
@@ -239,36 +311,86 @@
       </section>
 
       <!-- Distribution Charts -->
-      <section class="charts-grid">
+      <section class="charts-grid fade-in-up delay-1">
         {#if !$ratQuery.fetching && ratData.length > 0}
           <BarChart title="Towers by Technology (RAT)" data={ratData} />
+        {:else}
+          <div class="skeleton-card chart-skeleton">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-bars">
+              <div class="skeleton-bar" style="height: 60%"></div>
+              <div class="skeleton-bar" style="height: 80%"></div>
+              <div class="skeleton-bar" style="height: 45%"></div>
+              <div class="skeleton-bar" style="height: 30%"></div>
+              <div class="skeleton-bar" style="height: 20%"></div>
+            </div>
+          </div>
         {/if}
 
         {#if !$typeQuery.fetching && typeData.length > 0}
           <BarChart title="Towers by Type" data={typeData} />
+        {:else}
+          <div class="skeleton-card chart-skeleton">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-bars">
+              <div class="skeleton-bar" style="height: 90%"></div>
+              <div class="skeleton-bar" style="height: 50%"></div>
+              <div class="skeleton-bar" style="height: 35%"></div>
+              <div class="skeleton-bar" style="height: 25%"></div>
+              <div class="skeleton-bar" style="height: 15%"></div>
+            </div>
+          </div>
         {/if}
 
         {#if !$bandQuery.fetching && bandData.length > 0}
           <BarChart title="LTE Band Distribution" data={bandData} />
+        {:else}
+          <div class="skeleton-card chart-skeleton">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-bars">
+              <div class="skeleton-bar" style="height: 70%"></div>
+              <div class="skeleton-bar" style="height: 55%"></div>
+              <div class="skeleton-bar" style="height: 85%"></div>
+              <div class="skeleton-bar" style="height: 40%"></div>
+              <div class="skeleton-bar" style="height: 60%"></div>
+            </div>
+          </div>
         {/if}
       </section>
 
       <!-- Analytics Section -->
-      <section class="section-header">
+      <section class="section-header fade-in-up delay-2">
         <h2>Analytics</h2>
       </section>
 
-      <section class="analytics-grid">
+      <section class="analytics-grid fade-in-up delay-2">
         {#if !$growthQuery.fetching && growthData.length > 0}
           <TimelineChart title="Tower Discovery by Year" data={growthData} />
+        {:else}
+          <div class="skeleton-card chart-skeleton">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-bars">
+              <div class="skeleton-bar" style="height: 20%"></div>
+              <div class="skeleton-bar" style="height: 35%"></div>
+              <div class="skeleton-bar" style="height: 50%"></div>
+              <div class="skeleton-bar" style="height: 70%"></div>
+              <div class="skeleton-bar" style="height: 85%"></div>
+              <div class="skeleton-bar" style="height: 65%"></div>
+            </div>
+          </div>
         {/if}
 
         {#if !$freshnessQuery.fetching && freshnessData.length > 0}
           <DataFreshness data={freshnessData} />
+        {:else}
+          <div class="skeleton-card">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-donut"></div>
+          </div>
         {/if}
       </section>
 
-      <section class="analytics-grid">
+      <section class="analytics-grid fade-in-up delay-3">
         {#if !$signalQuery.fetching && $signalQuery.data}
           <SignalStats
             signalAvg={$signalQuery.data.cells_aggregate?.aggregate?.avg?.signal}
@@ -281,37 +403,107 @@
             avgSnr={$signalQuery.data.snr_stats?.aggregate?.avg?.lte_snr_max}
             avgRsrq={$signalQuery.data.snr_stats?.aggregate?.avg?.lte_rsrq_max}
           />
+        {:else}
+          <div class="skeleton-card">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-stats-grid">
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+            </div>
+          </div>
         {/if}
 
         {#if !$carrierBandsQuery.fetching && carrierBandsData.length > 0}
           <CarrierBands carriers={carrierBandsData} />
+        {:else}
+          <div class="skeleton-card">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-table">
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+            </div>
+          </div>
+        {/if}
+      </section>
+
+      <section class="full-width-section fade-in-up delay-3">
+        {#if !$carrierStatsQuery.fetching && $carrierStatsQuery.data?.providers}
+          <CarrierStats
+            carriers={$carrierStatsQuery.data.providers}
+            combinations={$carrierStatsQuery.data.tower_carrier_combinations || []}
+            totalTowers={$carrierStatsQuery.data.towers_aggregate?.aggregate?.count || 0}
+            sharedTowers={$carrierStatsQuery.data.multi_provider_towers?.aggregate?.count || 0}
+          />
+        {:else}
+          <div class="skeleton-card">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-table">
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+            </div>
+          </div>
         {/if}
       </section>
 
       <!-- Carriers & Recent Section -->
-      <section class="section-header">
+      <section class="section-header fade-in-up delay-3">
         <h2>Carriers & Recent Activity</h2>
       </section>
 
-      <section class="main-content">
+      <section class="main-content fade-in-up delay-4">
         <div class="left-column">
           {#if !$providersQuery.fetching && $providersQuery.data?.providers}
             <ProvidersTable providers={$providersQuery.data.providers} />
+          {:else}
+            <div class="skeleton-card">
+              <div class="skeleton-title"></div>
+              <div class="skeleton-table">
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+              </div>
+            </div>
           {/if}
         </div>
 
         <div class="right-column">
           {#if !$recentQuery.fetching && $recentQuery.data?.towers}
             <RecentTowers towers={$recentQuery.data.towers} title="Newest Towers Discovered" />
+          {:else}
+            <div class="skeleton-card">
+              <div class="skeleton-title"></div>
+              <div class="skeleton-list">
+                <div class="skeleton-list-item"></div>
+                <div class="skeleton-list-item"></div>
+                <div class="skeleton-list-item"></div>
+                <div class="skeleton-list-item"></div>
+              </div>
+            </div>
           {/if}
         </div>
       </section>
     {:else if activeTab === "map"}
       <section class="map-section">
-        <TowerMap
+        <MapFilters
+          filters={mapFilters}
+          onFilterChange={handleFilterChange}
+          totalCount={mapTotalCount}
+          filteredCount={mapClusters.length > 0 ? mapClusters.length : mapTowers.length}
+        />
+        <DeckGLMap
           towers={mapTowers}
+          clusters={mapClusters}
           totalCount={mapTotalCount}
           loading={mapLoading}
+          filters={mapFilters}
           onBoundsChange={handleBoundsChange}
         />
       </section>
@@ -397,30 +589,256 @@
     color: white;
   }
 
-  .loading {
+  .loading-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 70vh;
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .loading-content {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    padding: 6rem;
-    color: #a1a1aa;
+    text-align: center;
   }
 
-  .spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid #27273a;
-    border-top-color: #3b82f6;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-    margin-bottom: 1rem;
+  .loading-title {
+    margin: 0 0 0.5rem;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #f4f4f5;
+    letter-spacing: -0.02em;
   }
 
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
+  .loading-subtitle {
+    margin: 0 0 2rem;
+    color: #71717a;
+    font-size: 0.95rem;
+  }
+
+  .loading-progress {
+    width: 200px;
+    height: 4px;
+    background: #27273a;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 2rem;
+  }
+
+  .progress-bar {
+    height: 100%;
+    width: 30%;
+    background: linear-gradient(90deg, #3b82f6, #8b5cf6, #3b82f6);
+    background-size: 200% 100%;
+    border-radius: 4px;
+    animation: progress-slide 1.5s ease-in-out infinite;
+  }
+
+  @keyframes progress-slide {
+    0% {
+      width: 0%;
+      margin-left: 0;
+    }
+    50% {
+      width: 60%;
+      margin-left: 20%;
+    }
+    100% {
+      width: 0%;
+      margin-left: 100%;
     }
   }
+
+  /* Fade-in animations for dashboard sections */
+  .fade-in-up {
+    animation: fadeInUp 0.5s ease-out forwards;
+    opacity: 0;
+  }
+
+  .fade-in-up.delay-1 { animation-delay: 0.1s; }
+  .fade-in-up.delay-2 { animation-delay: 0.2s; }
+  .fade-in-up.delay-3 { animation-delay: 0.3s; }
+  .fade-in-up.delay-4 { animation-delay: 0.4s; }
+
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Skeleton loading styles */
+  .skeleton-card {
+    background: #1e1e2e;
+    border-radius: 12px;
+    padding: 1.5rem;
+    min-height: 200px;
+  }
+
+  .skeleton-title {
+    width: 40%;
+    height: 16px;
+    background: linear-gradient(90deg, #27273a 25%, #353548 50%, #27273a 75%);
+    background-size: 200% 100%;
+    border-radius: 4px;
+    margin-bottom: 1.5rem;
+    animation: skeleton-loading 1.5s ease-in-out infinite;
+  }
+
+  @keyframes skeleton-loading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  .chart-skeleton {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .skeleton-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 1rem;
+    height: 150px;
+    padding-top: 1rem;
+  }
+
+  .skeleton-bar {
+    flex: 1;
+    background: linear-gradient(90deg, #27273a 25%, #353548 50%, #27273a 75%);
+    background-size: 200% 100%;
+    border-radius: 4px 4px 0 0;
+    animation: skeleton-loading 1.5s ease-in-out infinite;
+  }
+
+  .skeleton-bar:nth-child(2) { animation-delay: 0.1s; }
+  .skeleton-bar:nth-child(3) { animation-delay: 0.2s; }
+  .skeleton-bar:nth-child(4) { animation-delay: 0.3s; }
+  .skeleton-bar:nth-child(5) { animation-delay: 0.4s; }
+  .skeleton-bar:nth-child(6) { animation-delay: 0.5s; }
+
+  .skeleton-donut {
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
+    margin: 1rem auto;
+    background: conic-gradient(
+      #27273a 0deg 90deg,
+      #353548 90deg 180deg,
+      #27273a 180deg 270deg,
+      #353548 270deg 360deg
+    );
+    animation: skeleton-spin 2s linear infinite;
+    position: relative;
+  }
+
+  .skeleton-donut::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 80px;
+    height: 80px;
+    background: #1e1e2e;
+    border-radius: 50%;
+  }
+
+  @keyframes skeleton-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .skeleton-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+    padding-top: 0.5rem;
+  }
+
+  .skeleton-stat {
+    height: 60px;
+    background: linear-gradient(90deg, #27273a 25%, #353548 50%, #27273a 75%);
+    background-size: 200% 100%;
+    border-radius: 8px;
+    animation: skeleton-loading 1.5s ease-in-out infinite;
+  }
+
+  .skeleton-stat:nth-child(2) { animation-delay: 0.15s; }
+  .skeleton-stat:nth-child(3) { animation-delay: 0.3s; }
+  .skeleton-stat:nth-child(4) { animation-delay: 0.45s; }
+
+  .skeleton-table {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .skeleton-row {
+    height: 40px;
+    background: linear-gradient(90deg, #27273a 25%, #353548 50%, #27273a 75%);
+    background-size: 200% 100%;
+    border-radius: 6px;
+    animation: skeleton-loading 1.5s ease-in-out infinite;
+  }
+
+  .skeleton-row:nth-child(2) { animation-delay: 0.1s; }
+  .skeleton-row:nth-child(3) { animation-delay: 0.2s; }
+  .skeleton-row:nth-child(4) { animation-delay: 0.3s; }
+  .skeleton-row:nth-child(5) { animation-delay: 0.4s; }
+
+  .skeleton-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .skeleton-list-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem;
+    background: #27273a;
+    border-radius: 8px;
+  }
+
+  .skeleton-list-item::before {
+    content: '';
+    width: 40px;
+    height: 40px;
+    background: linear-gradient(90deg, #353548 25%, #404055 50%, #353548 75%);
+    background-size: 200% 100%;
+    border-radius: 50%;
+    animation: skeleton-loading 1.5s ease-in-out infinite;
+  }
+
+  .skeleton-list-item::after {
+    content: '';
+    flex: 1;
+    height: 16px;
+    background: linear-gradient(90deg, #353548 25%, #404055 50%, #353548 75%);
+    background-size: 200% 100%;
+    border-radius: 4px;
+    animation: skeleton-loading 1.5s ease-in-out infinite;
+  }
+
+  .skeleton-list-item:nth-child(2)::before,
+  .skeleton-list-item:nth-child(2)::after { animation-delay: 0.15s; }
+  .skeleton-list-item:nth-child(3)::before,
+  .skeleton-list-item:nth-child(3)::after { animation-delay: 0.3s; }
+  .skeleton-list-item:nth-child(4)::before,
+  .skeleton-list-item:nth-child(4)::after { animation-delay: 0.45s; }
 
   .error {
     background: rgba(239, 68, 68, 0.1);
@@ -484,6 +902,10 @@
     margin-bottom: 1.5rem;
   }
 
+  .full-width-section {
+    margin-bottom: 1.5rem;
+  }
+
   .main-content {
     display: grid;
     grid-template-columns: 1.2fr 1fr;
@@ -499,6 +921,9 @@
 
   .map-section {
     margin-bottom: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
   }
 
   @media (max-width: 1200px) {

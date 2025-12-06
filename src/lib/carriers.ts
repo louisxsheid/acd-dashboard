@@ -72,7 +72,6 @@ export const CARRIER_NAMES: Record<string, string> = {
 
   // Sprint (now T-Mobile)
   "310-120": "Sprint (T-Mobile)",
-  "311-490": "Sprint (T-Mobile)",
   "311-870": "Sprint (T-Mobile)",
   "311-880": "Sprint (T-Mobile)",
   "312-530": "Sprint (T-Mobile)",

@@ -7,17 +7,17 @@
     provider_id: number;
     name: string | null;
     visible: boolean;
-    towers_aggregate: {
+    tower_providers_aggregate: {
       aggregate: {
         count: number;
       };
     };
-    lte_towers: {
+    lte_tower_providers: {
       aggregate: {
         count: number;
       };
     };
-    nr_towers: {
+    nr_tower_providers: {
       aggregate: {
         count: number;
       };
@@ -32,7 +32,7 @@
 
   let sortedProviders = $derived(
     [...providers].sort(
-      (a, b) => b.towers_aggregate.aggregate.count - a.towers_aggregate.aggregate.count
+      (a, b) => b.tower_providers_aggregate.aggregate.count - a.tower_providers_aggregate.aggregate.count
     )
   );
 </script>
@@ -61,9 +61,9 @@
               {carrierName}
             </td>
             <td class="mcc-mnc">{provider.country_id}-{provider.provider_id}</td>
-            <td class="towers right">{provider.towers_aggregate.aggregate.count.toLocaleString()}</td>
-            <td class="right">{provider.lte_towers.aggregate.count.toLocaleString()}</td>
-            <td class="right">{provider.nr_towers.aggregate.count.toLocaleString()}</td>
+            <td class="towers right">{provider.tower_providers_aggregate.aggregate.count.toLocaleString()}</td>
+            <td class="right">{provider.lte_tower_providers.aggregate.count.toLocaleString()}</td>
+            <td class="right">{provider.nr_tower_providers.aggregate.count.toLocaleString()}</td>
             <td>
               <span class="status" class:visible={provider.visible}>
                 {provider.visible ? "Active" : "Hidden"}

@@ -22,7 +22,17 @@ export const DASHBOARD_STATS = gql`
         count
       }
     }
+    tower_providers_aggregate {
+      aggregate {
+        count
+      }
+    }
     endc_towers: towers_aggregate(where: { endc_available: { _eq: true } }) {
+      aggregate {
+        count
+      }
+    }
+    multi_provider_towers: towers_aggregate(where: { provider_count: { _gt: 1 } }) {
       aggregate {
         count
       }
@@ -30,29 +40,30 @@ export const DASHBOARD_STATS = gql`
   }
 `;
 
+// RAT counts now come from tower_providers (one tower can have multiple RATs)
 export const TOWERS_BY_RAT = gql`
   query TowersByRAT {
-    lte: towers_aggregate(where: { rat: { _eq: "LTE" } }) {
+    lte: tower_providers_aggregate(where: { rat: { _eq: "LTE" } }) {
       aggregate {
         count
       }
     }
-    nr: towers_aggregate(where: { rat: { _eq: "NR" } }) {
+    nr: tower_providers_aggregate(where: { rat: { _eq: "NR" } }) {
       aggregate {
         count
       }
     }
-    gsm: towers_aggregate(where: { rat: { _eq: "GSM" } }) {
+    gsm: tower_providers_aggregate(where: { rat: { _eq: "GSM" } }) {
       aggregate {
         count
       }
     }
-    cdma: towers_aggregate(where: { rat: { _eq: "CDMA" } }) {
+    cdma: tower_providers_aggregate(where: { rat: { _eq: "CDMA" } }) {
       aggregate {
         count
       }
     }
-    umts: towers_aggregate(where: { rat: { _eq: "UMTS" } }) {
+    umts: tower_providers_aggregate(where: { rat: { _eq: "UMTS" } }) {
       aggregate {
         count
       }
@@ -95,6 +106,7 @@ export const TOWERS_BY_TYPE = gql`
   }
 `;
 
+// Recent towers with all their providers
 export const RECENT_TOWERS = gql`
   query RecentTowers($limit: Int!) {
     towers(
@@ -103,17 +115,29 @@ export const RECENT_TOWERS = gql`
       where: { first_seen_at: { _is_null: false } }
     ) {
       id
-      external_id
-      rat
       tower_type
       latitude
       longitude
       first_seen_at
       last_seen_at
       endc_available
-      provider {
-        country_id
-        provider_id
+      provider_count
+      tower_providers(order_by: { last_seen_at: desc_nulls_last }) {
+        id
+        external_id
+        rat
+        rat_subtype
+        site_id
+        region_id
+        first_seen_at
+        last_seen_at
+        endc_available
+        provider {
+          id
+          country_id
+          provider_id
+          name
+        }
       }
       cells_aggregate {
         aggregate {
@@ -124,6 +148,7 @@ export const RECENT_TOWERS = gql`
   }
 `;
 
+// Providers with tower stats via tower_providers junction table
 export const PROVIDERS_WITH_STATS = gql`
   query ProvidersWithStats {
     providers(order_by: { id: asc }) {
@@ -132,17 +157,17 @@ export const PROVIDERS_WITH_STATS = gql`
       provider_id
       name
       visible
-      towers_aggregate {
+      tower_providers_aggregate {
         aggregate {
           count
         }
       }
-      lte_towers: towers_aggregate(where: { rat: { _eq: "LTE" } }) {
+      lte_tower_providers: tower_providers_aggregate(where: { rat: { _eq: "LTE" } }) {
         aggregate {
           count
         }
       }
-      nr_towers: towers_aggregate(where: { rat: { _eq: "NR" } }) {
+      nr_tower_providers: tower_providers_aggregate(where: { rat: { _eq: "NR" } }) {
         aggregate {
           count
         }
@@ -191,7 +216,7 @@ export const BAND_DISTRIBUTION = gql`
   }
 `;
 
-// Map query - loads towers within viewport bounds
+// Map query - loads towers within viewport bounds with all their providers
 export const TOWERS_IN_BOUNDS = gql`
   query TowersInBounds(
     $minLat: float8!
@@ -211,12 +236,17 @@ export const TOWERS_IN_BOUNDS = gql`
       id
       latitude
       longitude
-      rat
       tower_type
       endc_available
-      provider {
-        country_id
-        provider_id
+      provider_count
+      tower_providers {
+        id
+        rat
+        endc_available
+        provider {
+          country_id
+          provider_id
+        }
       }
     }
     towers_aggregate(
@@ -227,6 +257,115 @@ export const TOWERS_IN_BOUNDS = gql`
     ) {
       aggregate {
         count
+      }
+    }
+  }
+`;
+
+// Pre-computed cluster queries using PostGIS ST_SnapToGrid
+// Coarse clusters (~100km grid) - for zoom < 6
+export const TOWER_CLUSTERS_COARSE = gql`
+  query TowerClustersCoarse(
+    $minLat: numeric!
+    $maxLat: numeric!
+    $minLng: numeric!
+    $maxLng: numeric!
+  ) {
+    tower_clusters_coarse(
+      where: {
+        lat: { _gte: $minLat, _lte: $maxLat }
+        lng: { _gte: $minLng, _lte: $maxLng }
+      }
+    ) {
+      lat
+      lng
+      tower_count
+      lte_count
+      nr_count
+      endc_count
+    }
+    tower_clusters_coarse_aggregate(
+      where: {
+        lat: { _gte: $minLat, _lte: $maxLat }
+        lng: { _gte: $minLng, _lte: $maxLng }
+      }
+    ) {
+      aggregate {
+        sum {
+          tower_count
+        }
+      }
+    }
+  }
+`;
+
+// Medium clusters (~10km grid) - for zoom 6-10
+export const TOWER_CLUSTERS_MEDIUM = gql`
+  query TowerClustersMedium(
+    $minLat: numeric!
+    $maxLat: numeric!
+    $minLng: numeric!
+    $maxLng: numeric!
+  ) {
+    tower_clusters_medium(
+      where: {
+        lat: { _gte: $minLat, _lte: $maxLat }
+        lng: { _gte: $minLng, _lte: $maxLng }
+      }
+    ) {
+      lat
+      lng
+      tower_count
+      lte_count
+      nr_count
+      endc_count
+    }
+    tower_clusters_medium_aggregate(
+      where: {
+        lat: { _gte: $minLat, _lte: $maxLat }
+        lng: { _gte: $minLng, _lte: $maxLng }
+      }
+    ) {
+      aggregate {
+        sum {
+          tower_count
+        }
+      }
+    }
+  }
+`;
+
+// Fine clusters (~1km grid) - for zoom 10-13
+export const TOWER_CLUSTERS_FINE = gql`
+  query TowersClustersFine(
+    $minLat: numeric!
+    $maxLat: numeric!
+    $minLng: numeric!
+    $maxLng: numeric!
+  ) {
+    tower_clusters_fine(
+      where: {
+        lat: { _gte: $minLat, _lte: $maxLat }
+        lng: { _gte: $minLng, _lte: $maxLng }
+      }
+    ) {
+      lat
+      lng
+      tower_count
+      lte_count
+      nr_count
+      endc_count
+    }
+    tower_clusters_fine_aggregate(
+      where: {
+        lat: { _gte: $minLat, _lte: $maxLat }
+        lng: { _gte: $minLng, _lte: $maxLng }
+      }
+    ) {
+      aggregate {
+        sum {
+          tower_count
+        }
       }
     }
   }
@@ -298,35 +437,36 @@ export const DATA_FRESHNESS = gql`
   }
 `;
 
-// Carrier band comparison
+// Carrier band comparison - now uses tower_providers to find bands by provider
 export const CARRIER_BANDS = gql`
   query CarrierBands {
     providers {
       id
       country_id
       provider_id
-      b2: towers_aggregate(
-        where: { tower_bands: { band_number: { _eq: 2 } } }
+      name
+      b2: tower_bands_aggregate(
+        where: { band_number: { _eq: 2 } }
       ) {
         aggregate { count }
       }
-      b4: towers_aggregate(
-        where: { tower_bands: { band_number: { _eq: 4 } } }
+      b4: tower_bands_aggregate(
+        where: { band_number: { _eq: 4 } }
       ) {
         aggregate { count }
       }
-      b12: towers_aggregate(
-        where: { tower_bands: { band_number: { _eq: 12 } } }
+      b12: tower_bands_aggregate(
+        where: { band_number: { _eq: 12 } }
       ) {
         aggregate { count }
       }
-      b13: towers_aggregate(
-        where: { tower_bands: { band_number: { _eq: 13 } } }
+      b13: tower_bands_aggregate(
+        where: { band_number: { _eq: 13 } }
       ) {
         aggregate { count }
       }
-      b14: towers_aggregate(
-        where: { tower_bands: { band_number: { _eq: 14 } } }
+      b14: tower_bands_aggregate(
+        where: { band_number: { _eq: 14 } }
       ) {
         aggregate { count }
       }
@@ -364,7 +504,10 @@ export const SIGNAL_STATS = gql`
         }
       }
     }
-    snr_stats: cells_aggregate(where: { lte_snr_max: { _is_null: false } }) {
+    snr_stats: cells_aggregate(where: {
+      lte_snr_max: { _is_null: false, _lt: 100 },
+      lte_rsrq_max: { _is_null: false, _gt: -50 }
+    }) {
       aggregate {
         avg {
           lte_snr_max
@@ -389,6 +532,185 @@ export const CELLS_PER_TOWER = gql`
     }
     many: towers_aggregate(where: { cells_aggregate: { count: { predicate: { _gt: 10 } } } }) {
       aggregate { count }
+    }
+  }
+`;
+
+// Get full tower details with all providers, cells, and bands
+export const TOWER_DETAILS = gql`
+  query TowerDetails($id: Int!) {
+    towers_by_pk(id: $id) {
+      id
+      location_hash
+      latitude
+      longitude
+      tower_type
+      first_seen_at
+      last_seen_at
+      generator
+      generator_time
+      tower_mover_id
+      contributors
+      has_bandwidth_data
+      has_frequency_data
+      endc_available
+      provider_count
+      visible
+      created_at
+      tower_providers(order_by: { last_seen_at: desc_nulls_last }) {
+        id
+        external_id
+        rat
+        rat_subtype
+        site_id
+        region_id
+        first_seen_at
+        last_seen_at
+        tower_mover
+        has_bandwidth_data
+        has_frequency_data
+        endc_available
+        visible
+        provider {
+          id
+          country_id
+          provider_id
+          name
+        }
+      }
+      cells(order_by: { last_seen_at: desc_nulls_last }) {
+        id
+        cell_id
+        pci
+        sector
+        bearing
+        bandwidth
+        signal
+        subsystem
+        first_seen_at
+        last_seen_at
+        lte_snr_max
+        lte_rsrq_max
+        max_speed_down_mbps
+        avg_speed_down_mbps
+        max_speed_up_mbps
+        avg_speed_up_mbps
+        endc_available
+        provider {
+          id
+          country_id
+          provider_id
+          name
+        }
+      }
+      tower_bands(order_by: { band_number: asc }) {
+        id
+        band_number
+        band_name
+        channel
+        bandwidth
+        modulation
+        provider {
+          id
+          country_id
+          provider_id
+          name
+        }
+      }
+    }
+  }
+`;
+
+// Providers per tower distribution
+export const PROVIDERS_PER_TOWER = gql`
+  query ProvidersPerTower {
+    single: towers_aggregate(where: { provider_count: { _eq: 1 } }) {
+      aggregate { count }
+    }
+    two: towers_aggregate(where: { provider_count: { _eq: 2 } }) {
+      aggregate { count }
+    }
+    three: towers_aggregate(where: { provider_count: { _eq: 3 } }) {
+      aggregate { count }
+    }
+    four_plus: towers_aggregate(where: { provider_count: { _gte: 4 } }) {
+      aggregate { count }
+    }
+  }
+`;
+
+// Carrier stats with EN-DC and overlap counts
+export const CARRIER_STATS = gql`
+  query CarrierStats {
+    providers {
+      id
+      country_id
+      provider_id
+      name
+      tower_providers_aggregate {
+        aggregate {
+          count
+        }
+      }
+      endc_tower_providers: tower_providers_aggregate(where: { endc_available: { _eq: true } }) {
+        aggregate {
+          count
+        }
+      }
+      lte_tower_providers: tower_providers_aggregate(where: { rat: { _eq: "LTE" } }) {
+        aggregate {
+          count
+        }
+      }
+      nr_tower_providers: tower_providers_aggregate(where: { rat: { _eq: "NR" } }) {
+        aggregate {
+          count
+        }
+      }
+    }
+    tower_carrier_combinations(order_by: { tower_count: desc }) {
+      combination
+      tower_count
+    }
+    towers_aggregate {
+      aggregate {
+        count
+      }
+    }
+    multi_provider_towers: towers_aggregate(where: { provider_count: { _gt: 1 } }) {
+      aggregate {
+        count
+      }
+    }
+  }
+`;
+
+// Multi-provider towers - towers with more than one carrier
+export const MULTI_PROVIDER_TOWERS = gql`
+  query MultiProviderTowers($limit: Int!) {
+    towers(
+      where: { provider_count: { _gt: 1 } }
+      order_by: { provider_count: desc }
+      limit: $limit
+    ) {
+      id
+      latitude
+      longitude
+      tower_type
+      provider_count
+      endc_available
+      first_seen_at
+      last_seen_at
+      tower_providers {
+        id
+        rat
+        provider {
+          id
+          country_id
+          provider_id
+          name
+        }
+      }
     }
   }
 `;
