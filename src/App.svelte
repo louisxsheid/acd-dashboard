@@ -17,7 +17,7 @@
     SIGNAL_STATS,
     CARRIER_BANDS,
     CARRIER_STATS,
-    BUSINESS_OPPORTUNITIES,
+    NETWORK_INSIGHTS,
   } from "./lib/graphql/queries";
   import StatCard from "./lib/components/StatCard.svelte";
   import BarChart from "./lib/components/BarChart.svelte";
@@ -30,7 +30,7 @@
   import DataFreshness from "./lib/components/DataFreshness.svelte";
   import CarrierBands from "./lib/components/CarrierBands.svelte";
   import CarrierStats from "./lib/components/CarrierStats.svelte";
-  import BusinessOpportunities from "./lib/components/BusinessOpportunities.svelte";
+  import NetworkInsights from "./lib/components/NetworkInsights.svelte";
 
   setContextClient(client);
 
@@ -55,7 +55,7 @@
   const signalQuery = queryStore({ client, query: SIGNAL_STATS });
   const carrierBandsQuery = queryStore({ client, query: CARRIER_BANDS });
   const carrierStatsQuery = queryStore({ client, query: CARRIER_STATS });
-  const businessOppsQuery = queryStore({ client, query: BUSINESS_OPPORTUNITIES });
+  const networkInsightsQuery = queryStore({ client, query: NETWORK_INSIGHTS });
 
   // Map state
   let mapBounds = $state({
@@ -233,35 +233,42 @@
     })) || []
   );
 
-  // Business opportunities data
-  let businessOppsData = $derived(() => {
-    if (!$businessOppsQuery.data) return { carriers: [], totalTowers: 0, singleCarrierTowers: 0 };
+  // Network insights data
+  let networkInsightsData = $derived(() => {
+    if (!$networkInsightsQuery.data) return null;
 
-    const data = $businessOppsQuery.data;
-    const exclusiveCounts: Record<number, number> = {
-      260: data.tmobile_exclusive?.aggregate?.count || 0,
-      410: data.att_exclusive?.aggregate?.count || 0,
-      480: data.verizon_exclusive?.aggregate?.count || 0,
-    };
+    const data = $networkInsightsQuery.data;
 
-    const carriers = data.providers?.map((p: any) => {
-      const total = p.tower_providers_aggregate?.aggregate?.count || 0;
-      const endc = p.endc_tower_providers?.aggregate?.count || 0;
-      return {
-        country_id: p.country_id,
-        provider_id: p.provider_id,
-        name: p.name,
-        total_sites: total,
-        endc_sites: endc,
-        non_endc_sites: total - endc,
-        exclusive_sites: exclusiveCounts[p.provider_id] || 0,
-      };
-    }).filter((c: any) => c.total_sites > 0) || [];
+    const carrierCells = data.providers?.map((p: any) => ({
+      country_id: p.country_id,
+      provider_id: p.provider_id,
+      total_cells: p.cells_aggregate?.aggregate?.count || 0,
+      cells_with_speed: p.cells_with_speed?.aggregate?.count || 0,
+      avg_download: p.cells_with_speed?.aggregate?.avg?.max_speed_down_mbps || null,
+      max_download: p.cells_with_speed?.aggregate?.max?.max_speed_down_mbps || null,
+      cells_with_snr: p.cells_with_snr?.aggregate?.count || 0,
+      avg_snr: p.cells_with_snr?.aggregate?.avg?.lte_snr_max || null,
+    })).filter((c: any) => c.total_cells > 0) || [];
+
+    const topBands = [
+      { band_number: 2, band_name: "PCS", count: data.b2?.aggregate?.count || 0 },
+      { band_number: 66, band_name: "AWS-3", count: data.b66?.aggregate?.count || 0 },
+      { band_number: 13, band_name: "700 MHz C", count: data.b13?.aggregate?.count || 0 },
+      { band_number: 12, band_name: "700 MHz A/B", count: data.b12?.aggregate?.count || 0 },
+      { band_number: 71, band_name: "600 MHz", count: data.b71?.aggregate?.count || 0 },
+      { band_number: 41, band_name: "TDD 2.5 GHz", count: data.b41?.aggregate?.count || 0 },
+      { band_number: 30, band_name: "WCS", count: data.b30?.aggregate?.count || 0 },
+      { band_number: 5, band_name: "CLR 850", count: data.b5?.aggregate?.count || 0 },
+      { band_number: 14, band_name: "FirstNet", count: data.b14?.aggregate?.count || 0 },
+      { band_number: 4, band_name: "AWS-1", count: data.b4?.aggregate?.count || 0 },
+    ].sort((a, b) => b.count - a.count);
 
     return {
-      carriers,
-      totalTowers: data.towers_aggregate?.aggregate?.count || 0,
-      singleCarrierTowers: data.single_carrier_towers?.aggregate?.count || 0,
+      carrierCells,
+      topBands,
+      totalCells: data.cells_aggregate?.aggregate?.count || 0,
+      cellsWithSpeed: data.cells_with_speed_total?.aggregate?.count || 0,
+      cellsWithSignal: data.cells_with_signal_total?.aggregate?.count || 0,
     };
   });
 </script>
@@ -486,19 +493,23 @@
         {/if}
       </section>
 
-      <!-- Business Opportunities Section -->
+      <!-- Network Insights Section -->
       <section class="section-header fade-in-up delay-3">
-        <h2>Business Opportunities</h2>
+        <h2>Network Data Insights</h2>
       </section>
 
       <section class="full-width-section fade-in-up delay-4">
-        {#if !$businessOppsQuery.fetching && $businessOppsQuery.data?.providers}
-          {@const oppsData = businessOppsData()}
-          <BusinessOpportunities
-            carriers={oppsData.carriers}
-            totalTowers={oppsData.totalTowers}
-            singleCarrierTowers={oppsData.singleCarrierTowers}
-          />
+        {#if !$networkInsightsQuery.fetching && $networkInsightsQuery.data?.providers}
+          {@const insightsData = networkInsightsData()}
+          {#if insightsData}
+            <NetworkInsights
+              carrierCells={insightsData.carrierCells}
+              topBands={insightsData.topBands}
+              totalCells={insightsData.totalCells}
+              cellsWithSpeed={insightsData.cellsWithSpeed}
+              cellsWithSignal={insightsData.cellsWithSignal}
+            />
+          {/if}
         {:else}
           <div class="skeleton-card">
             <div class="skeleton-title"></div>

@@ -685,70 +685,65 @@ export const CARRIER_STATS = gql`
   }
 `;
 
-// Business opportunities - 5G upgrades and co-location leads
-export const BUSINESS_OPPORTUNITIES = gql`
-  query BusinessOpportunities {
+// Network insights - cell density and performance data
+export const NETWORK_INSIGHTS = gql`
+  query NetworkInsights {
     providers {
       id
       country_id
       provider_id
       name
-      # Total sites for this carrier
-      tower_providers_aggregate {
+      cells_aggregate {
         aggregate {
           count
         }
       }
-      # EN-DC capable sites
-      endc_tower_providers: tower_providers_aggregate(where: { endc_available: { _eq: true } }) {
+      cells_with_speed: cells_aggregate(where: { max_speed_down_mbps: { _is_null: false, _gt: 0 } }) {
         aggregate {
           count
+          avg {
+            max_speed_down_mbps
+          }
+          max {
+            max_speed_down_mbps
+          }
+        }
+      }
+      cells_with_snr: cells_aggregate(where: { lte_snr_max: { _is_null: false, _lt: 100 } }) {
+        aggregate {
+          count
+          avg {
+            lte_snr_max
+          }
         }
       }
     }
-    # Single carrier towers (co-location opportunities)
-    single_carrier_towers: towers_aggregate(where: { provider_count: { _eq: 1 } }) {
+    cells_aggregate {
       aggregate {
         count
       }
     }
-    towers_aggregate {
+    cells_with_speed_total: cells_aggregate(where: { max_speed_down_mbps: { _is_null: false, _gt: 0 } }) {
       aggregate {
         count
       }
     }
-    # Exclusive sites per carrier - using tower_carrier_combinations view would be ideal
-    # but we can derive from single carrier towers
-    tmobile_exclusive: towers_aggregate(
-      where: {
-        provider_count: { _eq: 1 }
-        tower_providers: { provider: { provider_id: { _eq: 260 } } }
-      }
-    ) {
+    cells_with_signal_total: cells_aggregate(where: { lte_snr_max: { _is_null: false } }) {
       aggregate {
         count
       }
     }
-    att_exclusive: towers_aggregate(
-      where: {
-        provider_count: { _eq: 1 }
-        tower_providers: { provider: { provider_id: { _eq: 410 } } }
-      }
-    ) {
-      aggregate {
-        count
-      }
-    }
-    verizon_exclusive: towers_aggregate(
-      where: {
-        provider_count: { _eq: 1 }
-        tower_providers: { provider: { provider_id: { _eq: 480 } } }
-      }
-    ) {
-      aggregate {
-        count
-      }
-    }
+    # Top bands by deployment count
+    b2: tower_bands_aggregate(where: { band_number: { _eq: 2 } }) { aggregate { count } }
+    b4: tower_bands_aggregate(where: { band_number: { _eq: 4 } }) { aggregate { count } }
+    b5: tower_bands_aggregate(where: { band_number: { _eq: 5 } }) { aggregate { count } }
+    b12: tower_bands_aggregate(where: { band_number: { _eq: 12 } }) { aggregate { count } }
+    b13: tower_bands_aggregate(where: { band_number: { _eq: 13 } }) { aggregate { count } }
+    b14: tower_bands_aggregate(where: { band_number: { _eq: 14 } }) { aggregate { count } }
+    b30: tower_bands_aggregate(where: { band_number: { _eq: 30 } }) { aggregate { count } }
+    b41: tower_bands_aggregate(where: { band_number: { _eq: 41 } }) { aggregate { count } }
+    b66: tower_bands_aggregate(where: { band_number: { _eq: 66 } }) { aggregate { count } }
+    b71: tower_bands_aggregate(where: { band_number: { _eq: 71 } }) { aggregate { count } }
   }
 `;
 
