@@ -776,3 +776,84 @@ export const MULTI_PROVIDER_TOWERS = gql`
     }
   }
 `;
+
+// Band fingerprinting data - for tower hunters
+export const BAND_FINGERPRINTING = gql`
+  query BandFingerprinting {
+    # Total towers for percentages
+    towers_aggregate {
+      aggregate {
+        count
+      }
+    }
+    # Towers with band data
+    towers_with_bands: towers_aggregate(
+      where: { tower_bands_aggregate: { count: { predicate: { _gt: 0 } } } }
+    ) {
+      aggregate {
+        count
+      }
+    }
+    # Cells with bearing data (for sector directions)
+    cells_with_bearing: cells_aggregate(
+      where: { bearing: { _is_null: false } }
+    ) {
+      aggregate {
+        count
+      }
+    }
+    # Spectrum tier counts - Low band (<1GHz): B5, B12, B13, B14, B17, B26, B71
+    low_band_b5: tower_bands_aggregate(where: { band_number: { _eq: 5 } }) { aggregate { count } }
+    low_band_b12: tower_bands_aggregate(where: { band_number: { _eq: 12 } }) { aggregate { count } }
+    low_band_b13: tower_bands_aggregate(where: { band_number: { _eq: 13 } }) { aggregate { count } }
+    low_band_b14: tower_bands_aggregate(where: { band_number: { _eq: 14 } }) { aggregate { count } }
+    low_band_b17: tower_bands_aggregate(where: { band_number: { _eq: 17 } }) { aggregate { count } }
+    low_band_b26: tower_bands_aggregate(where: { band_number: { _eq: 26 } }) { aggregate { count } }
+    low_band_b71: tower_bands_aggregate(where: { band_number: { _eq: 71 } }) { aggregate { count } }
+    # Mid band (1-6GHz): B2, B4, B25, B30, B66, B41, B48
+    mid_band_b2: tower_bands_aggregate(where: { band_number: { _eq: 2 } }) { aggregate { count } }
+    mid_band_b4: tower_bands_aggregate(where: { band_number: { _eq: 4 } }) { aggregate { count } }
+    mid_band_b25: tower_bands_aggregate(where: { band_number: { _eq: 25 } }) { aggregate { count } }
+    mid_band_b30: tower_bands_aggregate(where: { band_number: { _eq: 30 } }) { aggregate { count } }
+    mid_band_b66: tower_bands_aggregate(where: { band_number: { _eq: 66 } }) { aggregate { count } }
+    mid_band_b41: tower_bands_aggregate(where: { band_number: { _eq: 41 } }) { aggregate { count } }
+    mid_band_b48: tower_bands_aggregate(where: { band_number: { _eq: 48 } }) { aggregate { count } }
+    # High band (mmWave): B77, B258, B260, B261
+    high_band_b77: tower_bands_aggregate(where: { band_number: { _eq: 77 } }) { aggregate { count } }
+    high_band_b258: tower_bands_aggregate(where: { band_number: { _eq: 258 } }) { aggregate { count } }
+    high_band_b260: tower_bands_aggregate(where: { band_number: { _eq: 260 } }) { aggregate { count } }
+    high_band_b261: tower_bands_aggregate(where: { band_number: { _eq: 261 } }) { aggregate { count } }
+    # Bearing distribution by octant (8 directions, 45 degrees each)
+    bearing_n: cells_aggregate(where: { _or: [{ bearing: { _gte: 337 } }, { bearing: { _lt: 23 } }] }) { aggregate { count } }
+    bearing_ne: cells_aggregate(where: { bearing: { _gte: 23, _lt: 68 } }) { aggregate { count } }
+    bearing_e: cells_aggregate(where: { bearing: { _gte: 68, _lt: 113 } }) { aggregate { count } }
+    bearing_se: cells_aggregate(where: { bearing: { _gte: 113, _lt: 158 } }) { aggregate { count } }
+    bearing_s: cells_aggregate(where: { bearing: { _gte: 158, _lt: 203 } }) { aggregate { count } }
+    bearing_sw: cells_aggregate(where: { bearing: { _gte: 203, _lt: 248 } }) { aggregate { count } }
+    bearing_w: cells_aggregate(where: { bearing: { _gte: 248, _lt: 293 } }) { aggregate { count } }
+    bearing_nw: cells_aggregate(where: { bearing: { _gte: 293, _lt: 337 } }) { aggregate { count } }
+    # Band combinations by carrier - use tower_band_combos view if available
+    # For now, get top bands per carrier for fingerprinting
+    providers {
+      id
+      country_id
+      provider_id
+      name
+      tower_bands_aggregate {
+        aggregate {
+          count
+        }
+      }
+      b2: tower_bands_aggregate(where: { band_number: { _eq: 2 } }) { aggregate { count } }
+      b4: tower_bands_aggregate(where: { band_number: { _eq: 4 } }) { aggregate { count } }
+      b5: tower_bands_aggregate(where: { band_number: { _eq: 5 } }) { aggregate { count } }
+      b12: tower_bands_aggregate(where: { band_number: { _eq: 12 } }) { aggregate { count } }
+      b13: tower_bands_aggregate(where: { band_number: { _eq: 13 } }) { aggregate { count } }
+      b14: tower_bands_aggregate(where: { band_number: { _eq: 14 } }) { aggregate { count } }
+      b30: tower_bands_aggregate(where: { band_number: { _eq: 30 } }) { aggregate { count } }
+      b41: tower_bands_aggregate(where: { band_number: { _eq: 41 } }) { aggregate { count } }
+      b66: tower_bands_aggregate(where: { band_number: { _eq: 66 } }) { aggregate { count } }
+      b71: tower_bands_aggregate(where: { band_number: { _eq: 71 } }) { aggregate { count } }
+    }
+  }
+`;

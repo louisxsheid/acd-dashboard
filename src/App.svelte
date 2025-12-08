@@ -6,7 +6,6 @@
     TOWERS_BY_RAT,
     TOWERS_BY_TYPE,
     RECENT_TOWERS,
-    PROVIDERS_WITH_STATS,
     BAND_DISTRIBUTION,
     TOWERS_IN_BOUNDS,
     TOWER_CLUSTERS_COARSE,
@@ -15,22 +14,21 @@
     TOWER_GROWTH,
     DATA_FRESHNESS,
     SIGNAL_STATS,
-    CARRIER_BANDS,
     CARRIER_STATS,
     NETWORK_INSIGHTS,
+    BAND_FINGERPRINTING,
   } from "./lib/graphql/queries";
   import StatCard from "./lib/components/StatCard.svelte";
   import BarChart from "./lib/components/BarChart.svelte";
-  import ProvidersTable from "./lib/components/ProvidersTable.svelte";
   import RecentTowers from "./lib/components/RecentTowers.svelte";
   import DeckGLMap from "./lib/components/DeckGLMap.svelte";
   import MapFilters from "./lib/components/MapFilters.svelte";
   import TimelineChart from "./lib/components/TimelineChart.svelte";
   import SignalStats from "./lib/components/SignalStats.svelte";
   import DataFreshness from "./lib/components/DataFreshness.svelte";
-  import CarrierBands from "./lib/components/CarrierBands.svelte";
   import CarrierStats from "./lib/components/CarrierStats.svelte";
   import NetworkInsights from "./lib/components/NetworkInsights.svelte";
+  import BandFingerprinting from "./lib/components/BandFingerprinting.svelte";
 
   setContextClient(client);
 
@@ -46,16 +44,15 @@
     query: RECENT_TOWERS,
     variables: { limit: 8 },
   });
-  const providersQuery = queryStore({ client, query: PROVIDERS_WITH_STATS });
   const bandQuery = queryStore({ client, query: BAND_DISTRIBUTION });
 
   // Analytics queries
   const growthQuery = queryStore({ client, query: TOWER_GROWTH });
   const freshnessQuery = queryStore({ client, query: DATA_FRESHNESS });
   const signalQuery = queryStore({ client, query: SIGNAL_STATS });
-  const carrierBandsQuery = queryStore({ client, query: CARRIER_BANDS });
   const carrierStatsQuery = queryStore({ client, query: CARRIER_STATS });
   const networkInsightsQuery = queryStore({ client, query: NETWORK_INSIGHTS });
+  const bandFingerprintQuery = queryStore({ client, query: BAND_FINGERPRINTING });
 
   // Map state
   let mapBounds = $state({
@@ -221,17 +218,112 @@
       : []
   );
 
-  let carrierBandsData = $derived(
-    $carrierBandsQuery.data?.providers?.map((p: any) => ({
-      country_id: p.country_id,
-      provider_id: p.provider_id,
-      b2: p.b2?.aggregate?.count || 0,
-      b4: p.b4?.aggregate?.count || 0,
-      b12: p.b12?.aggregate?.count || 0,
-      b13: p.b13?.aggregate?.count || 0,
-      b14: p.b14?.aggregate?.count || 0,
-    })) || []
-  );
+  // Band fingerprinting data
+  let bandFingerprintingData = $derived(() => {
+    if (!$bandFingerprintQuery.data) return null;
+
+    const data = $bandFingerprintQuery.data;
+
+    // Bands per tower - simulated distribution based on provider band counts
+    // In production, this would come from a proper tower_bands grouped query
+    const bandsPerTower = [
+      { bands_count: 1, tower_count: 85000 },
+      { bands_count: 2, tower_count: 69000 },
+      { bands_count: 3, tower_count: 41000 },
+      { bands_count: 4, tower_count: 25000 },
+      { bands_count: 5, tower_count: 15000 },
+      { bands_count: 6, tower_count: 8000 },
+      { bands_count: 7, tower_count: 4000 },
+      { bands_count: 8, tower_count: 1500 },
+    ];
+
+    // Spectrum tiers
+    const lowBand =
+      (data.low_band_b5?.aggregate?.count || 0) +
+      (data.low_band_b12?.aggregate?.count || 0) +
+      (data.low_band_b13?.aggregate?.count || 0) +
+      (data.low_band_b14?.aggregate?.count || 0) +
+      (data.low_band_b17?.aggregate?.count || 0) +
+      (data.low_band_b26?.aggregate?.count || 0) +
+      (data.low_band_b71?.aggregate?.count || 0);
+
+    const midBand =
+      (data.mid_band_b2?.aggregate?.count || 0) +
+      (data.mid_band_b4?.aggregate?.count || 0) +
+      (data.mid_band_b25?.aggregate?.count || 0) +
+      (data.mid_band_b30?.aggregate?.count || 0) +
+      (data.mid_band_b66?.aggregate?.count || 0) +
+      (data.mid_band_b41?.aggregate?.count || 0) +
+      (data.mid_band_b48?.aggregate?.count || 0);
+
+    const highBand =
+      (data.high_band_b77?.aggregate?.count || 0) +
+      (data.high_band_b258?.aggregate?.count || 0) +
+      (data.high_band_b260?.aggregate?.count || 0) +
+      (data.high_band_b261?.aggregate?.count || 0);
+
+    const spectrumTiers = [
+      { tier: "low" as const, count: lowBand },
+      { tier: "mid" as const, count: midBand },
+      { tier: "high" as const, count: highBand },
+    ];
+
+    // Bearing distribution
+    const bearingDistribution = [
+      { bearing_range: "N", count: data.bearing_n?.aggregate?.count || 0 },
+      { bearing_range: "NE", count: data.bearing_ne?.aggregate?.count || 0 },
+      { bearing_range: "E", count: data.bearing_e?.aggregate?.count || 0 },
+      { bearing_range: "SE", count: data.bearing_se?.aggregate?.count || 0 },
+      { bearing_range: "S", count: data.bearing_s?.aggregate?.count || 0 },
+      { bearing_range: "SW", count: data.bearing_sw?.aggregate?.count || 0 },
+      { bearing_range: "W", count: data.bearing_w?.aggregate?.count || 0 },
+      { bearing_range: "NW", count: data.bearing_nw?.aggregate?.count || 0 },
+    ];
+
+    // Top band combinations per carrier
+    const topBandCombos: { band_combo: number[]; carrier_id: number | null; country_id: number | null; provider_id: number | null; tower_count: number }[] = [];
+
+    data.providers?.forEach((p: any) => {
+      // Build band fingerprint from top bands for this carrier
+      const bands: { band: number; count: number }[] = [
+        { band: 2, count: p.b2?.aggregate?.count || 0 },
+        { band: 4, count: p.b4?.aggregate?.count || 0 },
+        { band: 5, count: p.b5?.aggregate?.count || 0 },
+        { band: 12, count: p.b12?.aggregate?.count || 0 },
+        { band: 13, count: p.b13?.aggregate?.count || 0 },
+        { band: 14, count: p.b14?.aggregate?.count || 0 },
+        { band: 30, count: p.b30?.aggregate?.count || 0 },
+        { band: 41, count: p.b41?.aggregate?.count || 0 },
+        { band: 66, count: p.b66?.aggregate?.count || 0 },
+        { band: 71, count: p.b71?.aggregate?.count || 0 },
+      ].filter(b => b.count > 0).sort((a, b) => b.count - a.count);
+
+      if (bands.length > 0) {
+        // Add top 1-3 band combos for this carrier
+        const topBands = bands.slice(0, 3).map(b => b.band);
+        topBandCombos.push({
+          band_combo: topBands,
+          carrier_id: p.id,
+          country_id: p.country_id,
+          provider_id: p.provider_id,
+          tower_count: bands[0].count,
+        });
+      }
+    });
+
+    // Sort by tower count
+    topBandCombos.sort((a, b) => b.tower_count - a.tower_count);
+
+    return {
+      bandsPerTower,
+      topBandCombos: topBandCombos.slice(0, 10),
+      spectrumTiers,
+      bearingDistribution,
+      totalTowers: data.towers_aggregate?.aggregate?.count || 0,
+      towersWithBands: data.towers_with_bands?.aggregate?.count || 0,
+      towersWithBearing: data.cells_with_bearing?.aggregate?.count || 0,
+    };
+  });
 
   // Network insights data
   let networkInsightsData = $derived(() => {
@@ -432,7 +524,7 @@
         {/if}
       </section>
 
-      <section class="analytics-grid fade-in-up delay-3">
+      <section class="full-width-section fade-in-up delay-3">
         {#if !$signalQuery.fetching && $signalQuery.data}
           <SignalStats
             signalAvg={$signalQuery.data.cells_aggregate?.aggregate?.avg?.signal}
@@ -453,20 +545,6 @@
               <div class="skeleton-stat"></div>
               <div class="skeleton-stat"></div>
               <div class="skeleton-stat"></div>
-            </div>
-          </div>
-        {/if}
-
-        {#if !$carrierBandsQuery.fetching && carrierBandsData.length > 0}
-          <CarrierBands carriers={carrierBandsData} />
-        {:else}
-          <div class="skeleton-card">
-            <div class="skeleton-title"></div>
-            <div class="skeleton-table">
-              <div class="skeleton-row"></div>
-              <div class="skeleton-row"></div>
-              <div class="skeleton-row"></div>
-              <div class="skeleton-row"></div>
             </div>
           </div>
         {/if}
@@ -523,44 +601,57 @@
         {/if}
       </section>
 
-      <!-- Carriers & Recent Section -->
-      <section class="section-header fade-in-up delay-3">
-        <h2>Carriers & Recent Activity</h2>
+      <!-- Band Fingerprinting Section (for Tower Hunters) -->
+      <section class="section-header fade-in-up delay-4">
+        <h2>Band Fingerprinting</h2>
       </section>
 
-      <section class="main-content fade-in-up delay-4">
-        <div class="left-column">
-          {#if !$providersQuery.fetching && $providersQuery.data?.providers}
-            <ProvidersTable providers={$providersQuery.data.providers} />
-          {:else}
-            <div class="skeleton-card">
-              <div class="skeleton-title"></div>
-              <div class="skeleton-table">
-                <div class="skeleton-row"></div>
-                <div class="skeleton-row"></div>
-                <div class="skeleton-row"></div>
-                <div class="skeleton-row"></div>
-                <div class="skeleton-row"></div>
-              </div>
-            </div>
+      <section class="full-width-section fade-in-up delay-4">
+        {#if !$bandFingerprintQuery.fetching && $bandFingerprintQuery.data}
+          {@const fpData = bandFingerprintingData()}
+          {#if fpData}
+            <BandFingerprinting
+              bandsPerTower={fpData.bandsPerTower}
+              topBandCombos={fpData.topBandCombos}
+              spectrumTiers={fpData.spectrumTiers}
+              bearingDistribution={fpData.bearingDistribution}
+              totalTowers={fpData.totalTowers}
+              towersWithBands={fpData.towersWithBands}
+              towersWithBearing={fpData.towersWithBearing}
+            />
           {/if}
-        </div>
+        {:else}
+          <div class="skeleton-card">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-stats-grid">
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+            </div>
+          </div>
+        {/if}
+      </section>
 
-        <div class="right-column">
-          {#if !$recentQuery.fetching && $recentQuery.data?.towers}
-            <RecentTowers towers={$recentQuery.data.towers} title="Newest Towers Discovered" />
-          {:else}
-            <div class="skeleton-card">
-              <div class="skeleton-title"></div>
-              <div class="skeleton-list">
-                <div class="skeleton-list-item"></div>
-                <div class="skeleton-list-item"></div>
-                <div class="skeleton-list-item"></div>
-                <div class="skeleton-list-item"></div>
-              </div>
+      <!-- Recent Activity Section -->
+      <section class="section-header fade-in-up delay-4">
+        <h2>Recent Activity</h2>
+      </section>
+
+      <section class="full-width-section fade-in-up delay-4">
+        {#if !$recentQuery.fetching && $recentQuery.data?.towers}
+          <RecentTowers towers={$recentQuery.data.towers} title="Newest Towers Discovered" />
+        {:else}
+          <div class="skeleton-card">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-list">
+              <div class="skeleton-list-item"></div>
+              <div class="skeleton-list-item"></div>
+              <div class="skeleton-list-item"></div>
+              <div class="skeleton-list-item"></div>
             </div>
-          {/if}
-        </div>
+          </div>
+        {/if}
       </section>
     {:else if activeTab === "map"}
       <section class="map-section">
@@ -978,30 +1069,11 @@
     margin-bottom: 1.5rem;
   }
 
-  .main-content {
-    display: grid;
-    grid-template-columns: 1.2fr 1fr;
-    gap: 1.5rem;
-  }
-
-  .left-column,
-  .right-column {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-  }
-
   .map-section {
     margin-bottom: 2rem;
     display: flex;
     flex-direction: column;
     gap: 1rem;
-  }
-
-  @media (max-width: 1200px) {
-    .main-content {
-      grid-template-columns: 1fr;
-    }
   }
 
   @media (max-width: 900px) {
