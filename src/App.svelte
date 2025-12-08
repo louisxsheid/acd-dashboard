@@ -301,6 +301,26 @@
       { bearing_range: "NW", count: data.bearing_nw?.aggregate?.count || 0 },
     ];
 
+    // Per-carrier bearing data for radar charts
+    const carrierBearings = (data.providers || [])
+      .filter((p: any) => (p.cells_with_bearing?.aggregate?.count || 0) > 0)
+      .map((p: any) => ({
+        country_id: p.country_id,
+        provider_id: p.provider_id,
+        total: p.cells_with_bearing?.aggregate?.count || 0,
+        bearings: [
+          p.bearing_n?.aggregate?.count || 0,
+          p.bearing_ne?.aggregate?.count || 0,
+          p.bearing_e?.aggregate?.count || 0,
+          p.bearing_se?.aggregate?.count || 0,
+          p.bearing_s?.aggregate?.count || 0,
+          p.bearing_sw?.aggregate?.count || 0,
+          p.bearing_w?.aggregate?.count || 0,
+          p.bearing_nw?.aggregate?.count || 0,
+        ],
+      }))
+      .sort((a: any, b: any) => b.total - a.total);
+
     // Top band combinations per carrier
     const topBandCombos: { band_combo: number[]; carrier_id: number | null; country_id: number | null; provider_id: number | null; tower_count: number }[] = [];
 
@@ -340,6 +360,7 @@
       topBandCombos: topBandCombos.slice(0, 10),
       spectrumTiers,
       bearingDistribution,
+      carrierBearings,
       totalTowers: data.towers_aggregate?.aggregate?.count || 0,
       towersWithBands: data.towers_with_bands?.aggregate?.count || 0,
       towersWithBearing: data.cells_with_bearing?.aggregate?.count || 0,
@@ -636,6 +657,7 @@
               topBandCombos={fpData.topBandCombos}
               spectrumTiers={fpData.spectrumTiers}
               bearingDistribution={fpData.bearingDistribution}
+              carrierBearings={fpData.carrierBearings}
               totalTowers={fpData.totalTowers}
               towersWithBands={fpData.towersWithBands}
               towersWithBearing={fpData.towersWithBearing}

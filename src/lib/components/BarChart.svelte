@@ -1,4 +1,9 @@
 <script lang="ts">
+  import { onMount, onDestroy } from "svelte";
+  import { Chart, registerables } from "chart.js";
+
+  Chart.register(...registerables);
+
   interface BarData {
     name: string;
     count: number;
@@ -12,9 +17,106 @@
 
   let { title, data }: Props = $props();
 
+  let canvas: HTMLCanvasElement;
+  let chart: Chart | null = null;
+
   let total = $derived(data.reduce((sum, d) => sum + d.count, 0));
-  let maxCount = $derived(Math.max(...data.map((d) => d.count), 1));
   let filteredData = $derived(data.filter((d) => d.count > 0));
+
+  function createChart() {
+    if (!canvas || filteredData.length === 0) return;
+
+    if (chart) {
+      chart.destroy();
+    }
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    chart = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: filteredData.map((d) => d.name),
+        datasets: [
+          {
+            data: filteredData.map((d) => d.count),
+            backgroundColor: filteredData.map((d) => d.color),
+            borderColor: filteredData.map((d) => d.color),
+            borderWidth: 0,
+            borderRadius: 4,
+            barThickness: 24,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: "y",
+        plugins: {
+          legend: {
+            display: false,
+          },
+          tooltip: {
+            backgroundColor: "#27273a",
+            titleColor: "#f4f4f5",
+            bodyColor: "#a1a1aa",
+            borderColor: "#3b3b50",
+            borderWidth: 1,
+            callbacks: {
+              label: function (context) {
+                const value = context.parsed.x;
+                const pct = total > 0 ? ((value / total) * 100).toFixed(1) : "0";
+                return `${value.toLocaleString()} (${pct}%)`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            grid: {
+              color: "#27273a",
+            },
+            ticks: {
+              color: "#71717a",
+              font: {
+                size: 10,
+              },
+              callback: function (value) {
+                return Number(value).toLocaleString();
+              },
+            },
+          },
+          y: {
+            grid: {
+              display: false,
+            },
+            ticks: {
+              color: "#a1a1aa",
+              font: {
+                size: 11,
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  onMount(() => {
+    setTimeout(() => {
+      createChart();
+    }, 50);
+  });
+
+  onDestroy(() => {
+    if (chart) chart.destroy();
+  });
+
+  $effect(() => {
+    if (filteredData && canvas) {
+      createChart();
+    }
+  });
 </script>
 
 <div class="bar-chart">
@@ -22,20 +124,8 @@
   {#if filteredData.length === 0}
     <p class="no-data">No data available</p>
   {:else}
-    <div class="bars">
-      {#each filteredData as item}
-        <div class="bar-row">
-          <span class="bar-label">{item.name}</span>
-          <div class="bar-container">
-            <div
-              class="bar"
-              style="width: {(item.count / maxCount) * 100}%; background: {item.color}"
-            ></div>
-          </div>
-          <span class="bar-value">{item.count.toLocaleString()}</span>
-          <span class="bar-percent">{((item.count / total) * 100).toFixed(1)}%</span>
-        </div>
-      {/each}
+    <div class="chart-container">
+      <canvas bind:this={canvas}></canvas>
     </div>
     <div class="total">
       Total: {total.toLocaleString()}
@@ -62,55 +152,9 @@
     font-size: 0.875rem;
   }
 
-  .bars {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .bar-row {
-    display: grid;
-    grid-template-columns: 100px 1fr 80px 50px;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .bar-label {
-    font-size: 0.8rem;
-    color: #a1a1aa;
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .bar-container {
-    height: 20px;
-    background: #27273a;
-    border-radius: 4px;
-    overflow: hidden;
-  }
-
-  .bar {
-    height: 100%;
-    border-radius: 4px;
-    transition: width 0.5s ease-out;
-    min-width: 2px;
-  }
-
-  .bar-value {
-    font-size: 0.8rem;
-    color: #f4f4f5;
-    font-weight: 600;
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .bar-percent {
-    font-size: 0.75rem;
-    color: #71717a;
-    text-align: right;
-    font-variant-numeric: tabular-nums;
+  .chart-container {
+    height: 200px;
+    position: relative;
   }
 
   .total {

@@ -854,6 +854,16 @@ export const BAND_FINGERPRINTING = gql`
       b41: tower_bands_aggregate(where: { band_number: { _eq: 41 } }) { aggregate { count } }
       b66: tower_bands_aggregate(where: { band_number: { _eq: 66 } }) { aggregate { count } }
       b71: tower_bands_aggregate(where: { band_number: { _eq: 71 } }) { aggregate { count } }
+      # Bearing data per carrier
+      bearing_n: cells_aggregate(where: { _or: [{ bearing: { _gte: 337 } }, { bearing: { _lt: 23 } }] }) { aggregate { count } }
+      bearing_ne: cells_aggregate(where: { bearing: { _gte: 23, _lt: 68 } }) { aggregate { count } }
+      bearing_e: cells_aggregate(where: { bearing: { _gte: 68, _lt: 113 } }) { aggregate { count } }
+      bearing_se: cells_aggregate(where: { bearing: { _gte: 113, _lt: 158 } }) { aggregate { count } }
+      bearing_s: cells_aggregate(where: { bearing: { _gte: 158, _lt: 203 } }) { aggregate { count } }
+      bearing_sw: cells_aggregate(where: { bearing: { _gte: 203, _lt: 248 } }) { aggregate { count } }
+      bearing_w: cells_aggregate(where: { bearing: { _gte: 248, _lt: 293 } }) { aggregate { count } }
+      bearing_nw: cells_aggregate(where: { bearing: { _gte: 293, _lt: 337 } }) { aggregate { count } }
+      cells_with_bearing: cells_aggregate(where: { bearing: { _is_null: false } }) { aggregate { count } }
     }
   }
 `;

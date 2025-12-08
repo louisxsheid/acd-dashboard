@@ -1,4 +1,9 @@
 <script lang="ts">
+  import { onMount, onDestroy } from "svelte";
+  import { Chart, registerables } from "chart.js";
+
+  Chart.register(...registerables);
+
   interface TimelineData {
     label: string;
     count: number;
@@ -12,27 +17,109 @@
 
   let { title, data }: Props = $props();
 
+  let canvas: HTMLCanvasElement;
+  let chart: Chart | null = null;
+
   let total = $derived(data.reduce((sum, d) => sum + d.count, 0));
-  let maxCount = $derived(Math.max(...data.map((d) => d.count), 1));
+
+  function createChart() {
+    if (!canvas || data.length === 0) return;
+
+    if (chart) {
+      chart.destroy();
+    }
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    chart = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: data.map((d) => d.label),
+        datasets: [
+          {
+            data: data.map((d) => d.count),
+            backgroundColor: data.map((d) => d.color),
+            borderColor: data.map((d) => d.color),
+            borderWidth: 0,
+            borderRadius: 4,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: false,
+          },
+          tooltip: {
+            backgroundColor: "#27273a",
+            titleColor: "#f4f4f5",
+            bodyColor: "#a1a1aa",
+            borderColor: "#3b3b50",
+            borderWidth: 1,
+            callbacks: {
+              label: function (context) {
+                const value = context.parsed.y;
+                const pct = total > 0 ? ((value / total) * 100).toFixed(1) : "0";
+                return `${value.toLocaleString()} towers (${pct}%)`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            grid: {
+              display: false,
+            },
+            ticks: {
+              color: "#71717a",
+              font: {
+                size: 11,
+              },
+            },
+          },
+          y: {
+            grid: {
+              color: "#27273a",
+            },
+            ticks: {
+              color: "#71717a",
+              font: {
+                size: 10,
+              },
+              callback: function (value) {
+                return Number(value).toLocaleString();
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  onMount(() => {
+    setTimeout(() => {
+      createChart();
+    }, 50);
+  });
+
+  onDestroy(() => {
+    if (chart) chart.destroy();
+  });
+
+  $effect(() => {
+    if (data && canvas) {
+      createChart();
+    }
+  });
 </script>
 
 <div class="timeline-chart">
   <h3>{title}</h3>
-  <div class="chart-area">
-    <div class="bars">
-      {#each data as item, i}
-        <div class="bar-column">
-          <div class="bar-value">{item.count > 0 ? item.count.toLocaleString() : ""}</div>
-          <div class="bar-track">
-            <div
-              class="bar"
-              style="height: {(item.count / maxCount) * 100}%; background: {item.color}"
-            ></div>
-          </div>
-          <div class="bar-label">{item.label}</div>
-        </div>
-      {/each}
-    </div>
+  <div class="chart-container">
+    <canvas bind:this={canvas}></canvas>
   </div>
   <div class="total">
     Total: {total.toLocaleString()}
@@ -53,60 +140,9 @@
     font-weight: 600;
   }
 
-  .chart-area {
+  .chart-container {
     height: 200px;
-    display: flex;
-    align-items: flex-end;
-  }
-
-  .bars {
-    display: flex;
-    align-items: flex-end;
-    gap: 0.5rem;
-    width: 100%;
-    height: 100%;
-  }
-
-  .bar-column {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    height: 100%;
-  }
-
-  .bar-value {
-    font-size: 0.7rem;
-    color: #a1a1aa;
-    margin-bottom: 0.25rem;
-    font-variant-numeric: tabular-nums;
-    min-height: 1rem;
-  }
-
-  .bar-track {
-    flex: 1;
-    width: 100%;
-    max-width: 40px;
-    background: #27273a;
-    border-radius: 4px 4px 0 0;
-    display: flex;
-    align-items: flex-end;
-    overflow: hidden;
-  }
-
-  .bar {
-    width: 100%;
-    border-radius: 4px 4px 0 0;
-    transition: height 0.5s ease-out;
-    min-height: 2px;
-  }
-
-  .bar-label {
-    font-size: 0.7rem;
-    color: #71717a;
-    margin-top: 0.5rem;
-    text-align: center;
-    white-space: nowrap;
+    position: relative;
   }
 
   .total {
