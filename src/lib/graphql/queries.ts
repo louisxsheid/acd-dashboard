@@ -685,6 +685,73 @@ export const CARRIER_STATS = gql`
   }
 `;
 
+// Business opportunities - 5G upgrades and co-location leads
+export const BUSINESS_OPPORTUNITIES = gql`
+  query BusinessOpportunities {
+    providers {
+      id
+      country_id
+      provider_id
+      name
+      # Total sites for this carrier
+      tower_providers_aggregate {
+        aggregate {
+          count
+        }
+      }
+      # EN-DC capable sites
+      endc_tower_providers: tower_providers_aggregate(where: { endc_available: { _eq: true } }) {
+        aggregate {
+          count
+        }
+      }
+    }
+    # Single carrier towers (co-location opportunities)
+    single_carrier_towers: towers_aggregate(where: { provider_count: { _eq: 1 } }) {
+      aggregate {
+        count
+      }
+    }
+    towers_aggregate {
+      aggregate {
+        count
+      }
+    }
+    # Exclusive sites per carrier - using tower_carrier_combinations view would be ideal
+    # but we can derive from single carrier towers
+    tmobile_exclusive: towers_aggregate(
+      where: {
+        provider_count: { _eq: 1 }
+        tower_providers: { provider: { provider_id: { _eq: 260 } } }
+      }
+    ) {
+      aggregate {
+        count
+      }
+    }
+    att_exclusive: towers_aggregate(
+      where: {
+        provider_count: { _eq: 1 }
+        tower_providers: { provider: { provider_id: { _eq: 410 } } }
+      }
+    ) {
+      aggregate {
+        count
+      }
+    }
+    verizon_exclusive: towers_aggregate(
+      where: {
+        provider_count: { _eq: 1 }
+        tower_providers: { provider: { provider_id: { _eq: 480 } } }
+      }
+    ) {
+      aggregate {
+        count
+      }
+    }
+  }
+`;
+
 // Multi-provider towers - towers with more than one carrier
 export const MULTI_PROVIDER_TOWERS = gql`
   query MultiProviderTowers($limit: Int!) {

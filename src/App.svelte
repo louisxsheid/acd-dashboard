@@ -17,6 +17,7 @@
     SIGNAL_STATS,
     CARRIER_BANDS,
     CARRIER_STATS,
+    BUSINESS_OPPORTUNITIES,
   } from "./lib/graphql/queries";
   import StatCard from "./lib/components/StatCard.svelte";
   import BarChart from "./lib/components/BarChart.svelte";
@@ -29,6 +30,7 @@
   import DataFreshness from "./lib/components/DataFreshness.svelte";
   import CarrierBands from "./lib/components/CarrierBands.svelte";
   import CarrierStats from "./lib/components/CarrierStats.svelte";
+  import BusinessOpportunities from "./lib/components/BusinessOpportunities.svelte";
 
   setContextClient(client);
 
@@ -53,6 +55,7 @@
   const signalQuery = queryStore({ client, query: SIGNAL_STATS });
   const carrierBandsQuery = queryStore({ client, query: CARRIER_BANDS });
   const carrierStatsQuery = queryStore({ client, query: CARRIER_STATS });
+  const businessOppsQuery = queryStore({ client, query: BUSINESS_OPPORTUNITIES });
 
   // Map state
   let mapBounds = $state({
@@ -229,6 +232,38 @@
       b14: p.b14?.aggregate?.count || 0,
     })) || []
   );
+
+  // Business opportunities data
+  let businessOppsData = $derived(() => {
+    if (!$businessOppsQuery.data) return { carriers: [], totalTowers: 0, singleCarrierTowers: 0 };
+
+    const data = $businessOppsQuery.data;
+    const exclusiveCounts: Record<number, number> = {
+      260: data.tmobile_exclusive?.aggregate?.count || 0,
+      410: data.att_exclusive?.aggregate?.count || 0,
+      480: data.verizon_exclusive?.aggregate?.count || 0,
+    };
+
+    const carriers = data.providers?.map((p: any) => {
+      const total = p.tower_providers_aggregate?.aggregate?.count || 0;
+      const endc = p.endc_tower_providers?.aggregate?.count || 0;
+      return {
+        country_id: p.country_id,
+        provider_id: p.provider_id,
+        name: p.name,
+        total_sites: total,
+        endc_sites: endc,
+        non_endc_sites: total - endc,
+        exclusive_sites: exclusiveCounts[p.provider_id] || 0,
+      };
+    }).filter((c: any) => c.total_sites > 0) || [];
+
+    return {
+      carriers,
+      totalTowers: data.towers_aggregate?.aggregate?.count || 0,
+      singleCarrierTowers: data.single_carrier_towers?.aggregate?.count || 0,
+    };
+  });
 </script>
 
 <main>
@@ -446,6 +481,32 @@
               <div class="skeleton-row"></div>
               <div class="skeleton-row"></div>
               <div class="skeleton-row"></div>
+            </div>
+          </div>
+        {/if}
+      </section>
+
+      <!-- Business Opportunities Section -->
+      <section class="section-header fade-in-up delay-3">
+        <h2>Business Opportunities</h2>
+      </section>
+
+      <section class="full-width-section fade-in-up delay-4">
+        {#if !$businessOppsQuery.fetching && $businessOppsQuery.data?.providers}
+          {@const oppsData = businessOppsData()}
+          <BusinessOpportunities
+            carriers={oppsData.carriers}
+            totalTowers={oppsData.totalTowers}
+            singleCarrierTowers={oppsData.singleCarrierTowers}
+          />
+        {:else}
+          <div class="skeleton-card">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-stats-grid">
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
             </div>
           </div>
         {/if}
