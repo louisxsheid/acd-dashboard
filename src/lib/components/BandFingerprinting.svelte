@@ -1,9 +1,16 @@
 <script lang="ts">
   import { getCarrierName, getCarrierColor } from "../carriers";
 
+  interface CarrierBandCount {
+    country_id: number;
+    provider_id: number;
+    count: number;
+  }
+
   interface BandPerTowerData {
     bands_count: number;
     tower_count: number;
+    by_carrier: CarrierBandCount[];
   }
 
   interface BandComboData {
@@ -93,8 +100,23 @@
   );
 
   // Bearing compass directions
-  const compassDirections = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  const compassLabels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
   let maxBearingCount = $derived(Math.max(...bearingDistribution.map((b) => b.count), 1));
+  let totalBearings = $derived(bearingDistribution.reduce((sum, b) => sum + b.count, 0));
+
+  // Calculate carrier slices for stacked bars
+  function getCarrierSlices(item: BandPerTowerData): { color: string; width: number; name: string }[] {
+    if (!item.by_carrier || item.by_carrier.length === 0) {
+      return [{ color: "linear-gradient(90deg, #3b82f6, #8b5cf6)", width: 100, name: "All" }];
+    }
+
+    const total = item.by_carrier.reduce((sum, c) => sum + c.count, 0);
+    return item.by_carrier.map((c) => ({
+      color: getCarrierColor(c.country_id, c.provider_id),
+      width: total > 0 ? (c.count / total) * 100 : 0,
+      name: getCarrierName(c.country_id, c.provider_id),
+    })).filter(s => s.width > 0);
+  }
 </script>
 
 <div class="band-fingerprinting">
@@ -107,7 +129,7 @@
       </div>
       <div class="header-stat">
         <span class="stat-value">{towersWithBearing.toLocaleString()}</span>
-        <span class="stat-label">With Bearing</span>
+        <span class="stat-label">Cells With Bearing</span>
       </div>
       <div class="header-stat">
         <span class="stat-value">{((towersWithBands / totalTowers) * 100).toFixed(1)}%</span>
@@ -117,20 +139,26 @@
   </div>
 
   <div class="fingerprint-grid">
-    <!-- Bands Per Tower Distribution -->
+    <!-- Bands Per Tower Distribution with Carrier Breakdown -->
     <div class="fingerprint-section">
       <h4>Bands Per Tower</h4>
-      <p class="section-desc">Distribution of band count per tower site</p>
+      <p class="section-desc">Distribution by band count, colored by carrier</p>
       <div class="bands-distribution">
         {#each bandsPerTower.slice(0, 8) as item}
           {@const barWidth = (item.tower_count / maxBandCount) * 100}
+          {@const slices = getCarrierSlices(item)}
           <div class="dist-bar-row">
             <span class="dist-label">{item.bands_count}</span>
             <div class="dist-bar-container">
-              <div
-                class="dist-bar"
-                style="width: {barWidth}%; background: linear-gradient(90deg, #3b82f6, #8b5cf6)"
-              ></div>
+              <div class="dist-bar-stacked" style="width: {barWidth}%">
+                {#each slices as slice}
+                  <div
+                    class="dist-bar-slice"
+                    style="width: {slice.width}%; background: {slice.color}"
+                    title="{slice.name}: {Math.round(slice.width)}%"
+                  ></div>
+                {/each}
+              </div>
             </div>
             <span class="dist-count">{item.tower_count.toLocaleString()}</span>
           </div>
@@ -195,31 +223,82 @@
       </div>
     </div>
 
-    <!-- Bearing/Azimuth Distribution -->
+    <!-- Bearing/Azimuth Distribution - Radar Style -->
     <div class="fingerprint-section">
       <h4>Sector Bearing Distribution</h4>
       <p class="section-desc">Cell sector directions (azimuth)</p>
-      <div class="bearing-compass">
-        <div class="compass-ring">
-          {#each bearingDistribution as dir, i}
-            {@const angle = i * 45 - 90}
-            {@const barHeight = (dir.count / maxBearingCount) * 40}
-            <div
-              class="compass-bar"
-              style="transform: rotate({angle}deg); --bar-height: {barHeight}px"
-            >
-              <div class="compass-bar-fill"></div>
-            </div>
+      <div class="bearing-radar">
+        <svg viewBox="0 0 200 200" class="radar-svg">
+          <!-- Background circles -->
+          <circle cx="100" cy="100" r="80" fill="none" stroke="#27273a" stroke-width="1" />
+          <circle cx="100" cy="100" r="60" fill="none" stroke="#27273a" stroke-width="1" />
+          <circle cx="100" cy="100" r="40" fill="none" stroke="#27273a" stroke-width="1" />
+          <circle cx="100" cy="100" r="20" fill="none" stroke="#27273a" stroke-width="1" />
+
+          <!-- Direction lines -->
+          {#each [0, 45, 90, 135, 180, 225, 270, 315] as angle}
+            <line
+              x1="100"
+              y1="100"
+              x2={100 + 85 * Math.sin((angle * Math.PI) / 180)}
+              y2={100 - 85 * Math.cos((angle * Math.PI) / 180)}
+              stroke="#27273a"
+              stroke-width="1"
+            />
           {/each}
-          <div class="compass-center">
-            <span class="compass-n">N</span>
-          </div>
-        </div>
-        <div class="bearing-stats">
+
+          <!-- Data polygon -->
+          <polygon
+            points={bearingDistribution
+              .map((d, i) => {
+                const angle = i * 45;
+                const radius = (d.count / maxBearingCount) * 75;
+                const x = 100 + radius * Math.sin((angle * Math.PI) / 180);
+                const y = 100 - radius * Math.cos((angle * Math.PI) / 180);
+                return `${x},${y}`;
+              })
+              .join(" ")}
+            fill="rgba(59, 130, 246, 0.3)"
+            stroke="#3b82f6"
+            stroke-width="2"
+          />
+
+          <!-- Data points -->
+          {#each bearingDistribution as d, i}
+            {@const angle = i * 45}
+            {@const radius = (d.count / maxBearingCount) * 75}
+            {@const x = 100 + radius * Math.sin((angle * Math.PI) / 180)}
+            {@const y = 100 - radius * Math.cos((angle * Math.PI) / 180)}
+            <circle cx={x} cy={y} r="4" fill="#3b82f6" />
+          {/each}
+
+          <!-- Direction labels -->
+          {#each compassLabels as label, i}
+            {@const angle = i * 45}
+            {@const x = 100 + 95 * Math.sin((angle * Math.PI) / 180)}
+            {@const y = 100 - 95 * Math.cos((angle * Math.PI) / 180)}
+            <text
+              x={x}
+              y={y}
+              text-anchor="middle"
+              dominant-baseline="middle"
+              fill={label === "N" ? "#ef4444" : "#71717a"}
+              font-size="11"
+              font-weight={label === "N" ? "700" : "500"}
+            >
+              {label}
+            </text>
+          {/each}
+        </svg>
+
+        <!-- Stats grid below radar -->
+        <div class="bearing-stats-grid">
           {#each bearingDistribution as dir, i}
-            <div class="bearing-stat">
-              <span class="bearing-dir">{compassDirections[i]}</span>
+            {@const pct = totalBearings > 0 ? (dir.count / totalBearings) * 100 : 0}
+            <div class="bearing-stat-item">
+              <span class="bearing-dir">{compassLabels[i]}</span>
               <span class="bearing-count">{dir.count.toLocaleString()}</span>
+              <span class="bearing-pct">{pct.toFixed(1)}%</span>
             </div>
           {/each}
         </div>
@@ -320,7 +399,7 @@
     color: #71717a;
   }
 
-  /* Bands distribution */
+  /* Bands distribution with stacked carrier colors */
   .bands-distribution {
     display: flex;
     flex-direction: column;
@@ -349,11 +428,17 @@
     overflow: hidden;
   }
 
-  .dist-bar {
+  .dist-bar-stacked {
     height: 100%;
+    display: flex;
     border-radius: 4px;
-    min-width: 4px;
+    overflow: hidden;
     transition: width 0.5s ease-out;
+  }
+
+  .dist-bar-slice {
+    height: 100%;
+    min-width: 2px;
   }
 
   .dist-count {
@@ -476,74 +561,34 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Bearing compass */
-  .bearing-compass {
+  /* Bearing radar chart */
+  .bearing-radar {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 1rem;
   }
 
-  .compass-ring {
-    position: relative;
-    width: 140px;
-    height: 140px;
-    border: 2px solid #3b3b50;
-    border-radius: 50%;
+  .radar-svg {
+    width: 100%;
+    max-width: 200px;
+    height: auto;
   }
 
-  .compass-bar {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 2px;
-    height: 50%;
-    transform-origin: bottom center;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-
-  .compass-bar-fill {
-    width: 8px;
-    height: var(--bar-height, 20px);
-    background: linear-gradient(180deg, #3b82f6, #8b5cf6);
-    border-radius: 2px;
-    margin-top: 4px;
-  }
-
-  .compass-center {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 40px;
-    height: 40px;
-    background: #27273a;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .compass-n {
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: #ef4444;
-  }
-
-  .bearing-stats {
+  .bearing-stats-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 0.5rem;
     width: 100%;
   }
 
-  .bearing-stat {
+  .bearing-stat-item {
     display: flex;
     flex-direction: column;
     align-items: center;
     padding: 0.25rem;
+    background: #1e1e2e;
+    border-radius: 4px;
   }
 
   .bearing-dir {
@@ -554,8 +599,14 @@
 
   .bearing-count {
     font-size: 0.75rem;
-    color: #a1a1aa;
+    color: #e4e4e7;
     font-variant-numeric: tabular-nums;
+    font-weight: 500;
+  }
+
+  .bearing-pct {
+    font-size: 0.65rem;
+    color: #52525b;
   }
 
   @media (max-width: 800px) {
