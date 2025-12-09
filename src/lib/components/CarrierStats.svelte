@@ -1,5 +1,15 @@
 <script lang="ts">
+  import { onMount, onDestroy } from "svelte";
+  import { Chart, registerables } from "chart.js";
   import { getCarrierName, getCarrierColor } from "../carriers";
+  import {
+    chartColors,
+    chartFonts,
+    tooltipConfig,
+    gridConfig,
+  } from "../chartConfig";
+
+  Chart.register(...registerables);
 
   interface CarrierData {
     id: number;
@@ -42,6 +52,12 @@
 
   let { carriers, combinations, totalTowers, sharedTowers }: Props = $props();
 
+  // Chart refs
+  let endcCanvas: HTMLCanvasElement;
+  let endcChart: Chart | null = null;
+  let comboCanvas: HTMLCanvasElement;
+  let comboChart: Chart | null = null;
+
   let sortedCarriers = $derived(
     [...carriers]
       .map((c) => ({
@@ -54,17 +70,8 @@
         nr: c.nr_tower_providers.aggregate.count,
       }))
       .filter((c) => c.total > 0)
-      .sort((a, b) => b.total - a.total)
-  );
-
-  // Find max EN-DC percentage for normalization
-  let maxEndcPct = $derived(
-    Math.max(...sortedCarriers.map((c) => (c.total > 0 ? (c.endc / c.total) * 100 : 0)), 1)
-  );
-
-  // Max combination count for normalization
-  let maxCombinationCount = $derived(
-    Math.max(...combinations.map((c) => c.tower_count), 1)
+      .sort((a, b) => b.endc - a.endc)
+      .slice(0, 4)
   );
 
   function pct(value: number, total: number): string {
@@ -72,7 +79,7 @@
     return ((value / total) * 100).toFixed(1) + "%";
   }
 
-  function getBarColor(combination: string): string {
+  function getComboColor(combination: string): string {
     if (combination.includes("T-Mobile") && combination.includes("AT&T") && combination.includes("Verizon")) {
       return "#8b5cf6"; // Purple for all three
     }
@@ -87,108 +94,239 @@
     }
     return "#71717a"; // Gray default
   }
+
+  function createEndcChart() {
+    if (!endcCanvas || sortedCarriers.length === 0) return;
+
+    if (endcChart) {
+      endcChart.destroy();
+    }
+
+    const ctx = endcCanvas.getContext("2d");
+    if (!ctx) return;
+
+    endcChart = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: sortedCarriers.map(c => c.name),
+        datasets: [{
+          data: sortedCarriers.map(c => c.endc),
+          backgroundColor: sortedCarriers.map(c => c.color),
+          borderColor: sortedCarriers.map(c => c.color),
+          borderWidth: 0,
+          borderRadius: 4,
+          barThickness: 18,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: "y",
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            ...tooltipConfig,
+            callbacks: {
+              label: function(context) {
+                const carrier = sortedCarriers[context.dataIndex];
+                const endcPct = carrier.total > 0 ? ((carrier.endc / carrier.total) * 100).toFixed(1) : "0";
+                return [
+                  `EN-DC Sites: ${(context.parsed.x ?? 0).toLocaleString()}`,
+                  `${endcPct}% of carrier sites`,
+                ];
+              }
+            }
+          },
+        },
+        scales: {
+          x: {
+            grid: gridConfig,
+            ticks: {
+              color: chartColors.text.muted,
+              font: { size: chartFonts.size.xs },
+              callback: function(value) {
+                return (Number(value) / 1000).toFixed(0) + 'k';
+              }
+            },
+          },
+          y: {
+            grid: { display: false },
+            ticks: {
+              color: chartColors.text.secondary,
+              font: { size: chartFonts.size.sm },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  function createComboChart() {
+    if (!comboCanvas || combinations.length === 0) return;
+
+    if (comboChart) {
+      comboChart.destroy();
+    }
+
+    const ctx = comboCanvas.getContext("2d");
+    if (!ctx) return;
+
+    const combos = combinations.slice(0, 4);
+
+    comboChart = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: combos.map(c => c.combination),
+        datasets: [{
+          data: combos.map(c => c.tower_count),
+          backgroundColor: combos.map(c => getComboColor(c.combination)),
+          borderColor: combos.map(c => getComboColor(c.combination)),
+          borderWidth: 0,
+          borderRadius: 4,
+          barThickness: 18,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: "y",
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            ...tooltipConfig,
+            callbacks: {
+              label: function(context) {
+                const combo = combos[context.dataIndex];
+                const pctVal = sharedTowers > 0 ? ((combo.tower_count / sharedTowers) * 100).toFixed(1) : "0";
+                return [
+                  `Shared Sites: ${(context.parsed.x ?? 0).toLocaleString()}`,
+                  `${pctVal}% of shared sites`,
+                ];
+              }
+            }
+          },
+        },
+        scales: {
+          x: {
+            grid: gridConfig,
+            ticks: {
+              color: chartColors.text.muted,
+              font: { size: chartFonts.size.xs },
+              callback: function(value) {
+                return (Number(value) / 1000).toFixed(0) + 'k';
+              }
+            },
+          },
+          y: {
+            grid: { display: false },
+            ticks: {
+              color: chartColors.text.secondary,
+              font: { size: chartFonts.size.xs },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  onMount(() => {
+    setTimeout(() => {
+      createEndcChart();
+      createComboChart();
+    }, 50);
+  });
+
+  onDestroy(() => {
+    if (endcChart) endcChart.destroy();
+    if (comboChart) comboChart.destroy();
+  });
+
+  $effect(() => {
+    if (sortedCarriers && endcCanvas) createEndcChart();
+  });
+
+  $effect(() => {
+    if (combinations && comboCanvas) createComboChart();
+  });
 </script>
 
 <div class="carrier-stats">
-  <div class="stats-header">
-    <h3>Carrier Network Statistics</h3>
-    <div class="summary-stats">
-      <div class="summary-item">
-        <span class="summary-value">{totalTowers.toLocaleString()}</span>
-        <span class="summary-label">Total Towers</span>
+  <div class="section-header">
+    <div class="header-title">
+      <h3>Carrier Network Statistics</h3>
+      <p class="section-subtitle">EN-DC capability and site sharing analysis</p>
+    </div>
+    <div class="header-stats">
+      <div class="header-stat">
+        <span class="stat-value">{totalTowers.toLocaleString()}</span>
+        <span class="stat-label">Total Towers</span>
       </div>
-      <div class="summary-item">
-        <span class="summary-value">{sharedTowers.toLocaleString()}</span>
-        <span class="summary-label">Shared Sites</span>
+      <div class="header-stat">
+        <span class="stat-value">{sharedTowers.toLocaleString()}</span>
+        <span class="stat-label">Shared Sites</span>
       </div>
-      <div class="summary-item">
-        <span class="summary-value">{pct(sharedTowers, totalTowers)}</span>
-        <span class="summary-label">Shared %</span>
+      <div class="header-stat">
+        <span class="stat-value">{pct(sharedTowers, totalTowers)}</span>
+        <span class="stat-label">Shared %</span>
       </div>
     </div>
   </div>
 
-  <div class="stats-grid">
-    <!-- EN-DC by Carrier -->
-    <div class="stat-section">
-      <h4>EN-DC Capability by Carrier</h4>
-      <div class="bar-chart">
-        {#each sortedCarriers as carrier}
-          {@const endcPct = carrier.total > 0 ? (carrier.endc / carrier.total) * 100 : 0}
-          {@const barWidth = (endcPct / maxEndcPct) * 100}
-          <div class="bar-row">
-            <div class="bar-label-section">
-              <span class="carrier-dot" style="background: {carrier.color}"></span>
-              <span class="bar-label">{carrier.name}</span>
-            </div>
-            <div class="bar-container">
-              <div
-                class="bar"
-                style="width: {barWidth}%; background: {carrier.color}"
-              ></div>
-            </div>
-            <div class="bar-stats">
-              <span class="bar-count">{carrier.endc.toLocaleString()}</span>
-              <span class="bar-pct">{endcPct.toFixed(1)}%</span>
-            </div>
-          </div>
-        {/each}
+  <div class="charts-row">
+    <div class="chart-card">
+      <div class="chart-header">
+        <h4>EN-DC Capability by Carrier</h4>
+        <p class="chart-desc">Sites with 5G NSA (EN-DC) support</p>
+      </div>
+      <div class="chart-body">
+        <canvas bind:this={endcCanvas}></canvas>
       </div>
     </div>
 
-    <!-- Shared Tower Combinations -->
-    <div class="stat-section">
-      <h4>Shared Site Carrier Combinations</h4>
-      <div class="bar-chart">
-        {#each combinations as combo}
-          {@const barWidth = (combo.tower_count / maxCombinationCount) * 100}
-          <div class="bar-row">
-            <div class="bar-label-section wide">
-              <span class="bar-label">{combo.combination}</span>
-            </div>
-            <div class="bar-container">
-              <div
-                class="bar"
-                style="width: {barWidth}%; background: {getBarColor(combo.combination)}"
-              ></div>
-            </div>
-            <div class="bar-stats">
-              <span class="bar-count">{combo.tower_count.toLocaleString()}</span>
-              <span class="bar-pct">{pct(combo.tower_count, sharedTowers)}</span>
-            </div>
-          </div>
-        {/each}
+    <div class="chart-card">
+      <div class="chart-header">
+        <h4>Shared Site Combinations</h4>
+        <p class="chart-desc">Multi-carrier tower configurations</p>
+      </div>
+      <div class="chart-body">
+        <canvas bind:this={comboCanvas}></canvas>
       </div>
     </div>
   </div>
 
   <!-- Quick Stats Table -->
-  <div class="stats-table">
-    <table>
-      <thead>
-        <tr>
-          <th>Carrier</th>
-          <th class="right">Sites</th>
-          <th class="right">EN-DC</th>
-          <th class="right">LTE</th>
-          <th class="right">5G NR</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each sortedCarriers as carrier}
+  <div class="stats-table-card">
+    <div class="chart-header">
+      <h4>Carrier Breakdown</h4>
+      <p class="chart-desc">Site counts by technology type</p>
+    </div>
+    <div class="table-container">
+      <table>
+        <thead>
           <tr>
-            <td class="carrier-name">
-              <span class="carrier-dot" style="background: {carrier.color}"></span>
-              {carrier.name}
-            </td>
-            <td class="right">{carrier.total.toLocaleString()}</td>
-            <td class="right endc">{carrier.endc.toLocaleString()}</td>
-            <td class="right lte">{carrier.lte.toLocaleString()}</td>
-            <td class="right nr">{carrier.nr.toLocaleString()}</td>
+            <th>Carrier</th>
+            <th class="right">Sites</th>
+            <th class="right">EN-DC</th>
+            <th class="right">LTE</th>
+            <th class="right">5G NR</th>
           </tr>
-        {/each}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {#each sortedCarriers as carrier}
+            <tr>
+              <td class="carrier-cell">
+                <span class="carrier-dot" style="background: {carrier.color}"></span>
+                {carrier.name}
+              </td>
+              <td class="right num">{carrier.total.toLocaleString()}</td>
+              <td class="right endc">{carrier.endc.toLocaleString()}</td>
+              <td class="right lte">{carrier.lte.toLocaleString()}</td>
+              <td class="right nr">{carrier.nr.toLocaleString()}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -199,13 +337,18 @@
     padding: 1.5rem;
   }
 
-  .stats-header {
+  .section-header {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
     margin-bottom: 1.5rem;
+    gap: 1.5rem;
     flex-wrap: wrap;
-    gap: 1rem;
+  }
+
+  .header-title {
+    flex: 1;
+    min-width: 200px;
   }
 
   h3 {
@@ -215,128 +358,80 @@
     font-weight: 600;
   }
 
-  h4 {
-    margin: 0 0 1rem;
+  .section-subtitle {
+    margin: 0.25rem 0 0;
     font-size: 0.8rem;
-    color: #a1a1aa;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    color: #71717a;
   }
 
-  .summary-stats {
+  h4 {
+    margin: 0;
+    font-size: 0.875rem;
+    color: #f4f4f5;
+    font-weight: 600;
+  }
+
+  .header-stats {
     display: flex;
-    gap: 1.5rem;
+    gap: 2rem;
   }
 
-  .summary-item {
+  .header-stat {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
   }
 
-  .summary-value {
+  .stat-value {
     font-size: 1.25rem;
     font-weight: 700;
     color: #f4f4f5;
     font-variant-numeric: tabular-nums;
   }
 
-  .summary-label {
-    font-size: 0.7rem;
+  .stat-label {
+    font-size: 0.65rem;
     color: #71717a;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
 
-  .stats-grid {
+  .charts-row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    grid-template-columns: repeat(2, 1fr);
     gap: 1.5rem;
     margin-bottom: 1.5rem;
   }
 
-  .stat-section {
+  .chart-card {
     background: #27273a;
-    border-radius: 8px;
-    padding: 1rem;
+    border-radius: 10px;
+    padding: 1.25rem;
   }
 
-  .bar-chart {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
+  .chart-header {
+    margin-bottom: 1rem;
   }
 
-  .bar-row {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .bar-label-section {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    width: 100px;
-    flex-shrink: 0;
-  }
-
-  .bar-label-section.wide {
-    width: 180px;
-  }
-
-  .carrier-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .bar-label {
-    font-size: 0.8rem;
-    color: #e4e4e7;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .bar-container {
-    flex: 1;
-    height: 24px;
-    background: #1e1e2e;
-    border-radius: 4px;
-    overflow: hidden;
-  }
-
-  .bar {
-    height: 100%;
-    border-radius: 4px;
-    min-width: 4px;
-    transition: width 0.5s ease-out;
-  }
-
-  .bar-stats {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    min-width: 70px;
-  }
-
-  .bar-count {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: #f4f4f5;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .bar-pct {
-    font-size: 0.7rem;
+  .chart-desc {
+    margin: 0.25rem 0 0;
+    font-size: 0.75rem;
     color: #71717a;
   }
 
-  .stats-table {
+  .chart-body {
+    height: 140px;
+  }
+
+  .stats-table-card {
+    background: #27273a;
+    border-radius: 10px;
+    padding: 1.25rem;
+  }
+
+  .table-container {
     overflow-x: auto;
+    margin-top: 0.75rem;
   }
 
   table {
@@ -346,12 +441,13 @@
 
   th {
     text-align: left;
-    padding: 0.75rem 0.5rem;
-    font-size: 0.7rem;
+    padding: 0.625rem 0.5rem;
+    font-size: 0.65rem;
     color: #71717a;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    border-bottom: 1px solid #27273a;
+    border-bottom: 1px solid #1e1e2e;
+    white-space: nowrap;
   }
 
   th.right {
@@ -359,14 +455,17 @@
   }
 
   td {
-    padding: 0.75rem 0.5rem;
-    font-size: 0.85rem;
+    padding: 0.625rem 0.5rem;
+    font-size: 0.8rem;
     color: #e4e4e7;
-    border-bottom: 1px solid #27273a;
+    border-bottom: 1px solid #1e1e2e;
   }
 
   td.right {
     text-align: right;
+  }
+
+  td.num {
     font-variant-numeric: tabular-nums;
   }
 
@@ -375,14 +474,21 @@
   }
 
   tr:hover td {
-    background: #27273a;
+    background: #1e1e2e;
   }
 
-  .carrier-name {
+  .carrier-cell {
     display: flex;
     align-items: center;
     gap: 0.5rem;
     font-weight: 500;
+  }
+
+  .carrier-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
   }
 
   .endc {
@@ -397,26 +503,18 @@
     color: #a78bfa;
   }
 
-  @media (max-width: 800px) {
-    .stats-header {
-      flex-direction: column;
-    }
-
-    .summary-stats {
-      width: 100%;
-      justify-content: space-between;
-    }
-
-    .summary-item {
-      align-items: center;
-    }
-
-    .stats-grid {
+  @media (max-width: 900px) {
+    .charts-row {
       grid-template-columns: 1fr;
     }
 
-    .bar-label-section.wide {
-      width: 140px;
+    .section-header {
+      flex-direction: column;
+    }
+
+    .header-stats {
+      width: 100%;
+      justify-content: space-between;
     }
   }
 </style>

@@ -535,10 +535,6 @@
       </section>
 
       <!-- Analytics Section -->
-      <section class="section-header fade-in-up delay-2">
-        <h2>Analytics</h2>
-      </section>
-
       <section class="analytics-grid fade-in-up delay-2">
         {#if !$growthQuery.fetching && growthData.length > 0}
           <TimelineChart title="Tower Discovery by Year" data={growthData} />
@@ -614,11 +610,7 @@
       </section>
 
       <!-- Network Insights Section -->
-      <section class="section-header fade-in-up delay-3">
-        <h2>Network Data Insights</h2>
-      </section>
-
-      <section class="full-width-section fade-in-up delay-4">
+      <section class="full-width-section fade-in-up delay-3">
         {#if !$networkInsightsQuery.fetching && $networkInsightsQuery.data?.providers}
           {@const insightsData = networkInsightsData()}
           {#if insightsData}
@@ -643,11 +635,7 @@
         {/if}
       </section>
 
-      <!-- Band Fingerprinting Section (for Tower Hunters) -->
-      <section class="section-header fade-in-up delay-4">
-        <h2>Band Fingerprinting</h2>
-      </section>
-
+      <!-- Band Fingerprinting Section -->
       <section class="full-width-section fade-in-up delay-4">
         {#if !$bandFingerprintQuery.fetching && $bandFingerprintQuery.data}
           {@const fpData = bandFingerprintingData()}
@@ -1024,19 +1012,6 @@
     grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
     gap: 1.5rem;
     margin-bottom: 2rem;
-  }
-
-  .section-header {
-    margin: 2.5rem 0 1.5rem;
-    padding-bottom: 0.75rem;
-    border-bottom: 1px solid #27273a;
-  }
-
-  .section-header h2 {
-    margin: 0;
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: #f4f4f5;
   }
 
   .analytics-grid {

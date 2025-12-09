@@ -2,6 +2,13 @@
   import { onMount, onDestroy } from "svelte";
   import { Chart, registerables } from "chart.js";
   import { getCarrierName, getCarrierColor } from "../carriers";
+  import {
+    chartColors,
+    chartFonts,
+    tooltipConfig,
+    legendConfig,
+    gridConfig,
+  } from "../chartConfig";
 
   Chart.register(...registerables);
 
@@ -39,7 +46,7 @@
     country_id: number;
     provider_id: number;
     total: number;
-    bearings: number[]; // [N, NE, E, SE, S, SW, W, NW]
+    bearings: number[];
   }
 
   interface Props {
@@ -65,16 +72,16 @@
   }: Props = $props();
 
   // Chart references
-  let radarCanvas: HTMLCanvasElement;
-  let radarChart: Chart | null = null;
   let bandsBarCanvas: HTMLCanvasElement;
   let bandsBarChart: Chart | null = null;
+  let comboBarCanvas: HTMLCanvasElement;
+  let comboBarChart: Chart | null = null;
+  let tierDoughnutCanvas: HTMLCanvasElement;
+  let tierDoughnutChart: Chart | null = null;
 
-  // Band count distribution
-  let maxBandCount = $derived(Math.max(...bandsPerTower.map((b) => b.tower_count), 1));
-
-  // Band combo max for normalization
-  let maxComboCount = $derived(Math.max(...topBandCombos.map((c) => c.tower_count), 1));
+  // Individual radar charts for each carrier
+  let radarCanvases: HTMLCanvasElement[] = [];
+  let radarCharts: (Chart | null)[] = [];
 
   // Spectrum tier colors
   const tierColors: Record<string, string> = {
@@ -111,103 +118,64 @@
 
   // Calculate spectrum tier percentages
   let tierTotal = $derived(spectrumTiers.reduce((sum, t) => sum + t.count, 0));
-  let tierPercentages = $derived(
-    spectrumTiers.map((t) => ({
-      ...t,
-      pct: tierTotal > 0 ? (t.count / tierTotal) * 100 : 0,
-    }))
-  );
 
   // Bearing compass directions
   const compassLabels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
-  // Calculate carrier slices for stacked bars with labels
-  function getCarrierSlices(item: BandPerTowerData): { color: string; width: number; name: string; count: number }[] {
-    if (!item.by_carrier || item.by_carrier.length === 0) {
-      return [{ color: "#3b82f6", width: 100, name: "All", count: item.tower_count }];
-    }
+  // Top 3 carriers for radar charts
+  let topCarriers = $derived(carrierBearings.slice(0, 3));
 
-    const total = item.by_carrier.reduce((sum, c) => sum + c.count, 0);
-    return item.by_carrier.map((c) => ({
-      color: getCarrierColor(c.country_id, c.provider_id),
-      width: total > 0 ? (c.count / total) * 100 : 0,
-      name: getCarrierName(c.country_id, c.provider_id),
-      count: c.count,
-    })).filter(s => s.width > 0).sort((a, b) => b.count - a.count);
-  }
+  // Create individual radar chart for a carrier
+  function createCarrierRadarChart(index: number) {
+    const canvas = radarCanvases[index];
+    const carrier = topCarriers[index];
 
-  // Hovered bar for showing carrier breakdown
-  let hoveredBar = $state<number | null>(null);
-
-  // Create radar chart for carrier bearings
-  function createRadarChart() {
-    if (!radarCanvas || !carrierBearings || carrierBearings.length === 0) return;
+    if (!canvas || !carrier) return;
 
     // Destroy existing chart
-    if (radarChart) {
-      radarChart.destroy();
+    if (radarCharts[index]) {
+      radarCharts[index]!.destroy();
     }
 
-    const ctx = radarCanvas.getContext("2d");
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Create datasets for each carrier (top 4)
-    const datasets = carrierBearings.slice(0, 4).map((carrier) => {
-      const color = getCarrierColor(carrier.country_id, carrier.provider_id);
-      const name = getCarrierName(carrier.country_id, carrier.provider_id);
-      // Normalize to percentages
-      const total = carrier.bearings.reduce((sum, b) => sum + b, 0);
-      const data = carrier.bearings.map(b => total > 0 ? (b / total) * 100 : 0);
+    const color = getCarrierColor(carrier.country_id, carrier.provider_id);
+    const total = carrier.bearings.reduce((sum, b) => sum + b, 0);
+    const data = carrier.bearings.map(b => total > 0 ? (b / total) * 100 : 0);
 
-      return {
-        label: name,
-        data,
-        backgroundColor: color + "33",
-        borderColor: color,
-        borderWidth: 2,
-        pointBackgroundColor: color,
-        pointBorderColor: "#1e1e2e",
-        pointBorderWidth: 1,
-        pointRadius: 4,
-        pointHoverRadius: 6,
-      };
-    });
-
-    radarChart = new Chart(ctx, {
+    radarCharts[index] = new Chart(ctx, {
       type: "radar",
       data: {
         labels: compassLabels,
-        datasets,
+        datasets: [{
+          data,
+          backgroundColor: color + "30",
+          borderColor: color,
+          borderWidth: 2,
+          pointBackgroundColor: color,
+          pointBorderColor: chartColors.surface,
+          pointBorderWidth: 2,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          fill: true,
+        }],
       },
       options: {
         responsive: true,
         maintainAspectRatio: true,
         plugins: {
-          legend: {
-            position: "bottom",
-            labels: {
-              color: "#a1a1aa",
-              padding: 12,
-              usePointStyle: true,
-              pointStyle: "circle",
-              font: {
-                size: 11,
-              },
-            },
-          },
+          legend: { display: false },
           tooltip: {
-            backgroundColor: "#27273a",
-            titleColor: "#f4f4f5",
-            bodyColor: "#a1a1aa",
-            borderColor: "#3b3b50",
-            borderWidth: 1,
+            ...tooltipConfig,
             callbacks: {
+              title: function(context) {
+                return `${context[0].label}`;
+              },
               label: function(context) {
-                const carrier = carrierBearings[context.datasetIndex];
-                const direction = compassLabels[context.dataIndex];
                 const count = carrier.bearings[context.dataIndex];
                 const pct = context.parsed.r.toFixed(1);
-                return `${context.dataset.label}: ${count.toLocaleString()} cells (${pct}%)`;
+                return `${count.toLocaleString()} cells (${pct}%)`;
               }
             }
           },
@@ -215,19 +183,20 @@
         scales: {
           r: {
             angleLines: {
-              color: "#3b3b50",
+              color: chartColors.gridLight,
+              lineWidth: 1,
             },
             grid: {
-              color: "#27273a",
+              color: chartColors.grid,
+              lineWidth: 1,
+              circular: true,
             },
             pointLabels: {
-              color: "#e4e4e7",
+              color: chartColors.text.secondary,
               font: {
-                size: 12,
-                weight: "bold",
-              },
-              callback: function(label, index) {
-                return label === "N" ? "N" : label;
+                size: 11,
+                weight: "normal" as const,
+                family: chartFonts.family,
               },
             },
             ticks: {
@@ -235,14 +204,20 @@
               stepSize: 5,
             },
             suggestedMin: 0,
-            suggestedMax: 20,
+            suggestedMax: 18,
           },
         },
       },
     });
   }
 
-  // Create horizontal bar chart for bands per tower
+  function createAllRadarCharts() {
+    for (let i = 0; i < topCarriers.length; i++) {
+      createCarrierRadarChart(i);
+    }
+  }
+
+  // Create horizontal stacked bar chart for bands per tower
   function createBandsBarChart() {
     if (!bandsBarCanvas || !bandsPerTower || bandsPerTower.length === 0) return;
 
@@ -253,7 +228,6 @@
     const ctx = bandsBarCanvas.getContext("2d");
     if (!ctx) return;
 
-    // Get unique carriers across all band counts
     const allCarriers = new Map<string, { country_id: number; provider_id: number; color: string; name: string }>();
     bandsPerTower.forEach(item => {
       item.by_carrier?.forEach(c => {
@@ -269,7 +243,6 @@
       });
     });
 
-    // Sort carriers by total count across all bands
     const carrierTotals = new Map<string, number>();
     bandsPerTower.forEach(item => {
       item.by_carrier?.forEach(c => {
@@ -282,7 +255,6 @@
       .sort((a, b) => (carrierTotals.get(b[0]) || 0) - (carrierTotals.get(a[0]) || 0))
       .slice(0, 4);
 
-    // Create datasets for each carrier
     const datasets = sortedCarriers.map(([key, carrier]) => {
       const data = bandsPerTower.slice(0, 8).map(item => {
         const found = item.by_carrier?.find(c => `${c.country_id}-${c.provider_id}` === key);
@@ -295,7 +267,9 @@
         backgroundColor: carrier.color,
         borderColor: carrier.color,
         borderWidth: 0,
-        borderRadius: 2,
+        borderRadius: 4,
+        barPercentage: 0.85,
+        categoryPercentage: 0.9,
       };
     });
 
@@ -313,24 +287,15 @@
           legend: {
             position: "bottom",
             labels: {
-              color: "#a1a1aa",
-              padding: 12,
-              usePointStyle: true,
-              pointStyle: "rect",
-              font: {
-                size: 11,
-              },
+              ...legendConfig.labels,
+              pointStyle: "rectRounded",
             },
           },
           tooltip: {
-            backgroundColor: "#27273a",
-            titleColor: "#f4f4f5",
-            bodyColor: "#a1a1aa",
-            borderColor: "#3b3b50",
-            borderWidth: 1,
+            ...tooltipConfig,
             callbacks: {
               label: function(context) {
-                return `${context.dataset.label}: ${context.parsed.x.toLocaleString()} towers`;
+                return `${context.dataset.label}: ${(context.parsed.x ?? 0).toLocaleString()} towers`;
               }
             }
           },
@@ -338,14 +303,10 @@
         scales: {
           x: {
             stacked: true,
-            grid: {
-              color: "#27273a",
-            },
+            grid: gridConfig,
             ticks: {
-              color: "#71717a",
-              font: {
-                size: 10,
-              },
+              color: chartColors.text.muted,
+              font: { size: chartFonts.size.xs },
               callback: function(value) {
                 return Number(value).toLocaleString();
               }
@@ -353,14 +314,10 @@
           },
           y: {
             stacked: true,
-            grid: {
-              display: false,
-            },
+            grid: { display: false },
             ticks: {
-              color: "#e4e4e7",
-              font: {
-                size: 11,
-              },
+              color: chartColors.text.secondary,
+              font: { size: chartFonts.size.sm },
             },
           },
         },
@@ -368,139 +325,262 @@
     });
   }
 
+  // Create horizontal bar chart for band combinations
+  function createComboBarChart() {
+    if (!comboBarCanvas || !topBandCombos || topBandCombos.length === 0) return;
+
+    if (comboBarChart) {
+      comboBarChart.destroy();
+    }
+
+    const ctx = comboBarCanvas.getContext("2d");
+    if (!ctx) return;
+
+    const combos = topBandCombos.slice(0, 8);
+    const labels = combos.map(c => `${formatBandCombo(c.band_combo)} (${getComboCarrier(c)})`);
+    const colors = combos.map(c => getComboColor(c));
+
+    comboBarChart = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [{
+          data: combos.map(c => c.tower_count),
+          backgroundColor: colors,
+          borderColor: colors,
+          borderWidth: 0,
+          borderRadius: 4,
+          barPercentage: 0.8,
+          categoryPercentage: 0.9,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: "y",
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            ...tooltipConfig,
+            callbacks: {
+              title: function(context) {
+                const combo = combos[context[0].dataIndex];
+                return formatBandCombo(combo.band_combo);
+              },
+              label: function(context) {
+                const combo = combos[context.dataIndex];
+                return [
+                  `Carrier: ${getComboCarrier(combo)}`,
+                  `Towers: ${(context.parsed.x ?? 0).toLocaleString()}`,
+                ];
+              }
+            }
+          },
+        },
+        scales: {
+          x: {
+            grid: gridConfig,
+            ticks: {
+              color: chartColors.text.muted,
+              font: { size: chartFonts.size.xs },
+              callback: function(value) {
+                return Number(value).toLocaleString();
+              }
+            },
+          },
+          y: {
+            grid: { display: false },
+            ticks: {
+              color: chartColors.text.secondary,
+              font: { size: chartFonts.size.sm },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  // Create doughnut chart for spectrum tiers
+  function createTierDoughnutChart() {
+    if (!tierDoughnutCanvas || !spectrumTiers || spectrumTiers.length === 0) return;
+
+    if (tierDoughnutChart) {
+      tierDoughnutChart.destroy();
+    }
+
+    const ctx = tierDoughnutCanvas.getContext("2d");
+    if (!ctx) return;
+
+    tierDoughnutChart = new Chart(ctx, {
+      type: "doughnut",
+      data: {
+        labels: spectrumTiers.map(t => tierLabels[t.tier]),
+        datasets: [{
+          data: spectrumTiers.map(t => t.count),
+          backgroundColor: spectrumTiers.map(t => tierColors[t.tier]),
+          borderColor: chartColors.surface,
+          borderWidth: 3,
+          hoverBorderColor: chartColors.text.primary,
+          hoverBorderWidth: 2,
+          hoverOffset: 6,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "60%",
+        plugins: {
+          legend: {
+            position: "bottom",
+            labels: {
+              ...legendConfig.labels,
+              pointStyle: "rectRounded",
+            },
+          },
+          tooltip: {
+            ...tooltipConfig,
+            callbacks: {
+              label: function(context) {
+                const pct = tierTotal > 0 ? ((context.parsed / tierTotal) * 100).toFixed(1) : "0";
+                return `${context.parsed.toLocaleString()} bands (${pct}%)`;
+              }
+            }
+          },
+        },
+      },
+    });
+  }
+
   onMount(() => {
-    // Delay chart creation to ensure canvas is ready
     setTimeout(() => {
-      createRadarChart();
+      createAllRadarCharts();
       createBandsBarChart();
+      createComboBarChart();
+      createTierDoughnutChart();
     }, 100);
   });
 
   onDestroy(() => {
-    if (radarChart) radarChart.destroy();
+    radarCharts.forEach(chart => chart?.destroy());
     if (bandsBarChart) bandsBarChart.destroy();
+    if (comboBarChart) comboBarChart.destroy();
+    if (tierDoughnutChart) tierDoughnutChart.destroy();
   });
 
-  // Recreate charts when data changes
   $effect(() => {
-    if (carrierBearings && radarCanvas) {
-      createRadarChart();
+    if (carrierBearings && radarCanvases.length > 0) {
+      createAllRadarCharts();
     }
   });
 
   $effect(() => {
-    if (bandsPerTower && bandsBarCanvas) {
-      createBandsBarChart();
-    }
+    if (bandsPerTower && bandsBarCanvas) createBandsBarChart();
+  });
+
+  $effect(() => {
+    if (topBandCombos && comboBarCanvas) createComboBarChart();
+  });
+
+  $effect(() => {
+    if (spectrumTiers && tierDoughnutCanvas) createTierDoughnutChart();
   });
 </script>
 
 <div class="band-fingerprinting">
   <div class="section-header">
-    <h3>Band Fingerprinting</h3>
+    <div class="header-title">
+      <h3>Band Fingerprinting</h3>
+      <p class="section-subtitle">Tower identification patterns for cell hunters</p>
+    </div>
     <div class="header-stats">
       <div class="header-stat">
         <span class="stat-value">{towersWithBands.toLocaleString()}</span>
-        <span class="stat-label">With Band Data</span>
+        <span class="stat-label">Towers with Band Data</span>
       </div>
       <div class="header-stat">
         <span class="stat-value">{towersWithBearing.toLocaleString()}</span>
-        <span class="stat-label">Cells With Bearing</span>
+        <span class="stat-label">Cells with Bearing</span>
       </div>
       <div class="header-stat">
         <span class="stat-value">{((towersWithBands / totalTowers) * 100).toFixed(1)}%</span>
-        <span class="stat-label">Coverage</span>
+        <span class="stat-label">Band Coverage</span>
       </div>
     </div>
   </div>
 
-  <div class="fingerprint-grid">
-    <!-- Bands Per Tower Distribution with Chart.js -->
-    <div class="fingerprint-section chart-section">
-      <h4>Bands Per Tower Distribution</h4>
-      <p class="section-desc">Tower count by band count, stacked by carrier</p>
-      <div class="chart-container bands-chart">
+  <!-- Top row: Bands Per Tower + Spectrum Tiers -->
+  <div class="chart-row two-col">
+    <div class="chart-card">
+      <div class="chart-header">
+        <h4>Bands Per Tower</h4>
+        <p class="chart-desc">Distribution of band count per tower, by carrier</p>
+      </div>
+      <div class="chart-body tall">
         <canvas bind:this={bandsBarCanvas}></canvas>
       </div>
     </div>
 
-    <!-- Spectrum Tier Distribution -->
-    <div class="fingerprint-section">
-      <h4>Spectrum Tier Distribution</h4>
-      <p class="section-desc">Band records by frequency tier</p>
-      <div class="tier-chart">
-        <div class="tier-bar-stacked">
-          {#each tierPercentages as tier}
-            {#if tier.pct > 0}
-              <div
-                class="tier-segment"
-                style="width: {tier.pct}%; background: {tierColors[tier.tier]}"
-                title="{tierLabels[tier.tier]}: {tier.count.toLocaleString()}"
-              ></div>
-            {/if}
-          {/each}
-        </div>
-        <div class="tier-legend">
-          {#each tierPercentages as tier}
-            <div class="tier-item">
-              <span class="tier-dot" style="background: {tierColors[tier.tier]}"></span>
-              <span class="tier-label">{tierLabels[tier.tier]}</span>
-              <span class="tier-value">{tier.count.toLocaleString()}</span>
-              <span class="tier-pct">({tier.pct.toFixed(1)}%)</span>
-            </div>
-          {/each}
+    <div class="chart-card">
+      <div class="chart-header">
+        <h4>Spectrum Tiers</h4>
+        <p class="chart-desc">Band distribution by frequency tier</p>
+      </div>
+      <div class="chart-body doughnut">
+        <canvas bind:this={tierDoughnutCanvas}></canvas>
+        <div class="doughnut-center">
+          <span class="doughnut-value">{tierTotal.toLocaleString()}</span>
+          <span class="doughnut-label">Total Bands</span>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Band Combinations and Bearing side by side -->
-  <div class="fingerprint-row">
-    <!-- Band Combinations (Carrier Signatures) -->
-    <div class="fingerprint-section flex-grow">
-      <h4>Band Combinations (Carrier Signatures)</h4>
-      <p class="section-desc">Most common band combinations per carrier - use to identify towers</p>
-      <div class="combo-chart">
-        {#each topBandCombos.slice(0, 8) as combo}
-          {@const barWidth = (combo.tower_count / maxComboCount) * 100}
-          <div class="combo-row">
-            <div class="combo-info">
-              <span class="combo-bands">{formatBandCombo(combo.band_combo)}</span>
-              <span class="combo-carrier" style="color: {getComboColor(combo)}"
-                >{getComboCarrier(combo)}</span
-              >
-            </div>
-            <div class="combo-bar-container">
-              <div
-                class="combo-bar"
-                style="width: {barWidth}%; background: {getComboColor(combo)}"
-              ></div>
-            </div>
-            <span class="combo-count">{combo.tower_count.toLocaleString()}</span>
-          </div>
-        {/each}
+  <!-- Band Combinations -->
+  <div class="chart-row">
+    <div class="chart-card full">
+      <div class="chart-header">
+        <h4>Carrier Band Signatures</h4>
+        <p class="chart-desc">Most common band combinations by carrier - use these patterns to identify carrier towers in the field</p>
+      </div>
+      <div class="chart-body">
+        <canvas bind:this={comboBarCanvas}></canvas>
       </div>
     </div>
+  </div>
 
-    <!-- Bearing/Azimuth Distribution - Chart.js Radar -->
-    <div class="fingerprint-section bearing-section">
-      <h4>Sector Bearings by Carrier</h4>
-      <p class="section-desc">Cell azimuth distribution (%) for each carrier</p>
-      <div class="chart-container radar-chart">
-        <canvas bind:this={radarCanvas}></canvas>
+  <!-- Sector Bearings - 3 separate carrier charts -->
+  <div class="chart-row">
+    <div class="chart-card full">
+      <div class="chart-header">
+        <h4>Sector Bearing Patterns by Carrier</h4>
+        <p class="chart-desc">Cell azimuth distribution showing sector orientation patterns - peaks indicate preferred directions aligned with roads or population centers</p>
       </div>
-      <div class="bearing-stats">
-        <div class="bearing-stat-row">
-          <span class="bearing-stat-label">Total Cells with Bearing:</span>
-          <span class="bearing-stat-value">{towersWithBearing.toLocaleString()}</span>
-        </div>
-        {#each carrierBearings.slice(0, 4) as carrier}
-          <div class="bearing-stat-row">
-            <span class="carrier-indicator" style="background: {getCarrierColor(carrier.country_id, carrier.provider_id)}"></span>
-            <span class="bearing-stat-label">{getCarrierName(carrier.country_id, carrier.provider_id)}:</span>
-            <span class="bearing-stat-value">{carrier.total.toLocaleString()}</span>
+
+      <div class="radar-grid">
+        {#each topCarriers as carrier, i}
+          {@const color = getCarrierColor(carrier.country_id, carrier.provider_id)}
+          {@const name = getCarrierName(carrier.country_id, carrier.provider_id)}
+          <div class="radar-card">
+            <div class="radar-card-header">
+              <span class="carrier-dot" style="background: {color}"></span>
+              <span class="carrier-name">{name}</span>
+              <span class="carrier-count">{carrier.total.toLocaleString()} cells</span>
+            </div>
+            <div class="radar-chart-container">
+              <canvas bind:this={radarCanvases[i]}></canvas>
+            </div>
           </div>
         {/each}
+      </div>
+
+      <div class="radar-footer">
+        <div class="radar-legend">
+          <span class="legend-note">Each chart shows the % distribution of cell sector orientations. A uniform distribution (12.5% per direction) indicates random placement.</span>
+        </div>
+        <div class="bearing-total">
+          <span class="total-label">Total Cells with Bearing Data:</span>
+          <span class="total-value">{towersWithBearing.toLocaleString()}</span>
+        </div>
       </div>
     </div>
   </div>
@@ -518,8 +598,13 @@
     justify-content: space-between;
     align-items: flex-start;
     margin-bottom: 1.5rem;
+    gap: 1.5rem;
     flex-wrap: wrap;
-    gap: 1rem;
+  }
+
+  .header-title {
+    flex: 1;
+    min-width: 200px;
   }
 
   h3 {
@@ -529,10 +614,16 @@
     font-weight: 600;
   }
 
+  .section-subtitle {
+    margin: 0.25rem 0 0;
+    font-size: 0.8rem;
+    color: #71717a;
+  }
+
   h4 {
-    margin: 0 0 0.5rem;
-    font-size: 0.85rem;
-    color: #e4e4e7;
+    margin: 0;
+    font-size: 0.875rem;
+    color: #f4f4f5;
     font-weight: 600;
   }
 
@@ -555,217 +646,196 @@
   }
 
   .stat-label {
-    font-size: 0.7rem;
+    font-size: 0.65rem;
     color: #71717a;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
 
-  .fingerprint-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  /* Chart rows */
+  .chart-row {
+    display: flex;
     gap: 1.5rem;
     margin-bottom: 1.5rem;
   }
 
-  .fingerprint-row {
-    display: flex;
+  .chart-row:last-child {
+    margin-bottom: 0;
+  }
+
+  .chart-row.two-col {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr;
     gap: 1.5rem;
   }
 
-  .fingerprint-section {
+  /* Chart cards */
+  .chart-card {
     background: #27273a;
+    border-radius: 10px;
+    padding: 1.25rem;
+    min-width: 0;
+  }
+
+  .chart-card.full {
+    flex: 1;
+  }
+
+  .chart-header {
+    margin-bottom: 1rem;
+  }
+
+  .chart-desc {
+    margin: 0.25rem 0 0;
+    font-size: 0.75rem;
+    color: #71717a;
+    line-height: 1.4;
+  }
+
+  .chart-body {
+    height: 220px;
+    position: relative;
+  }
+
+  .chart-body.tall {
+    height: 260px;
+  }
+
+  .chart-body.doughnut {
+    height: 240px;
+  }
+
+  /* Doughnut center label */
+  .doughnut-center {
+    position: absolute;
+    top: 40%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+  }
+
+  .doughnut-value {
+    display: block;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #f4f4f5;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .doughnut-label {
+    display: block;
+    font-size: 0.6rem;
+    color: #71717a;
+    text-transform: uppercase;
+    margin-top: 0.125rem;
+  }
+
+  /* Radar grid - 3 carrier charts */
+  .radar-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+    margin-bottom: 1rem;
+  }
+
+  .radar-card {
+    background: #1e1e2e;
     border-radius: 8px;
     padding: 1rem;
   }
 
-  .fingerprint-section.chart-section {
-    min-height: 280px;
+  .radar-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid #27273a;
   }
 
-  .fingerprint-section.flex-grow {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .fingerprint-section.bearing-section {
-    width: 380px;
+  .carrier-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
     flex-shrink: 0;
   }
 
-  .section-desc {
-    margin: 0 0 1rem;
+  .carrier-name {
+    font-size: 0.85rem;
+    color: #f4f4f5;
+    font-weight: 600;
+    flex: 1;
+  }
+
+  .carrier-count {
     font-size: 0.75rem;
     color: #71717a;
+    font-variant-numeric: tabular-nums;
   }
 
-  /* Chart containers */
-  .chart-container {
-    position: relative;
+  .radar-chart-container {
+    aspect-ratio: 1;
+    max-height: 200px;
   }
 
-  .chart-container.bands-chart {
-    height: 220px;
-  }
-
-  .chart-container.radar-chart {
-    height: 240px;
-    margin-bottom: 0.75rem;
-  }
-
-  /* Spectrum tiers */
-  .tier-chart {
+  .radar-footer {
     display: flex;
-    flex-direction: column;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 1rem;
+    border-top: 1px solid #1e1e2e;
     gap: 1rem;
   }
 
-  .tier-bar-stacked {
-    display: flex;
-    height: 32px;
-    border-radius: 6px;
-    overflow: hidden;
-  }
-
-  .tier-segment {
-    transition: width 0.5s ease-out;
-  }
-
-  .tier-legend {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .tier-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .tier-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-    flex-shrink: 0;
-  }
-
-  .tier-label {
-    font-size: 0.8rem;
-    color: #a1a1aa;
+  .radar-legend {
     flex: 1;
   }
 
-  .tier-value {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: #e4e4e7;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .tier-pct {
+  .legend-note {
     font-size: 0.75rem;
     color: #71717a;
-    min-width: 50px;
-    text-align: right;
+    line-height: 1.4;
   }
 
-  /* Band combinations */
-  .combo-chart {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .combo-row {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .combo-info {
-    display: flex;
-    flex-direction: column;
-    width: 120px;
-    flex-shrink: 0;
-  }
-
-  .combo-bands {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: #f4f4f5;
-    font-family: monospace;
-  }
-
-  .combo-carrier {
-    font-size: 0.7rem;
-  }
-
-  .combo-bar-container {
-    flex: 1;
-    height: 24px;
-    background: #1e1e2e;
-    border-radius: 4px;
-    overflow: hidden;
-  }
-
-  .combo-bar {
-    height: 100%;
-    border-radius: 4px;
-    min-width: 4px;
-    transition: width 0.5s ease-out;
-  }
-
-  .combo-count {
-    min-width: 60px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: #f4f4f5;
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* Bearing stats below radar chart */
-  .bearing-stats {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid #1e1e2e;
-  }
-
-  .bearing-stat-row {
+  .bearing-total {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    background: #1e1e2e;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+  }
+
+  .total-label {
     font-size: 0.75rem;
-  }
-
-  .carrier-indicator {
-    width: 8px;
-    height: 8px;
-    border-radius: 2px;
-    flex-shrink: 0;
-  }
-
-  .bearing-stat-label {
     color: #a1a1aa;
-    flex: 1;
   }
 
-  .bearing-stat-value {
-    color: #e4e4e7;
-    font-weight: 500;
+  .total-value {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #f4f4f5;
     font-variant-numeric: tabular-nums;
+  }
+
+  @media (max-width: 1200px) {
+    .radar-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
   }
 
   @media (max-width: 900px) {
-    .fingerprint-row {
+    .chart-row {
       flex-direction: column;
     }
 
-    .fingerprint-section.bearing-section {
-      width: 100%;
+    .chart-row.two-col {
+      grid-template-columns: 1fr;
+    }
+
+    .radar-grid {
+      grid-template-columns: 1fr;
     }
 
     .section-header {
@@ -777,8 +847,9 @@
       justify-content: space-between;
     }
 
-    .fingerprint-grid {
-      grid-template-columns: 1fr;
+    .radar-footer {
+      flex-direction: column;
+      align-items: flex-start;
     }
   }
 </style>

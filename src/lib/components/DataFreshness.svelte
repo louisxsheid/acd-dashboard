@@ -1,6 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { Chart, registerables } from "chart.js";
+  import {
+    chartColors,
+    chartFonts,
+    tooltipConfig,
+    legendConfig,
+  } from "../chartConfig";
 
   Chart.register(...registerables);
 
@@ -41,10 +47,11 @@
           {
             data: data.map((d) => d.count),
             backgroundColor: data.map((d) => d.color),
-            borderColor: "#1e1e2e",
+            borderColor: chartColors.background,
             borderWidth: 2,
-            hoverBorderColor: "#f4f4f5",
+            hoverBorderColor: chartColors.text.primary,
             hoverBorderWidth: 2,
+            hoverOffset: 6,
           },
         ],
       },
@@ -54,23 +61,19 @@
         cutout: "65%",
         plugins: {
           legend: {
-            position: "right",
+            position: "bottom",
             labels: {
-              color: "#a1a1aa",
-              padding: 10,
+              color: chartColors.text.secondary,
+              padding: 12,
               usePointStyle: true,
               pointStyle: "circle",
               font: {
-                size: 11,
+                size: chartFonts.size.sm,
               },
             },
           },
           tooltip: {
-            backgroundColor: "#27273a",
-            titleColor: "#f4f4f5",
-            bodyColor: "#a1a1aa",
-            borderColor: "#3b3b50",
-            borderWidth: 1,
+            ...tooltipConfig,
             callbacks: {
               label: function (context) {
                 const value = context.parsed;
@@ -102,14 +105,19 @@
 </script>
 
 <div class="data-freshness">
-  <h3>Data Freshness</h3>
-  <p class="description">When towers were last observed</p>
+  <div class="chart-header">
+    <div>
+      <h3>Data Freshness</h3>
+      <p class="description">When towers were last observed</p>
+    </div>
+    <span class="chart-total">{total.toLocaleString()} total</span>
+  </div>
 
   <div class="chart-container">
     <canvas bind:this={canvas}></canvas>
     <div class="center-stat">
       <span class="center-value">{total.toLocaleString()}</span>
-      <span class="center-label">Total</span>
+      <span class="center-label">Towers</span>
     </div>
   </div>
 
@@ -130,30 +138,47 @@
     background: #1e1e2e;
     border-radius: 12px;
     padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    min-height: 280px;
+  }
+
+  .chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1rem;
   }
 
   h3 {
     margin: 0;
-    font-size: 1rem;
+    font-size: 0.9rem;
     color: #f4f4f5;
     font-weight: 600;
   }
 
   .description {
-    margin: 0.25rem 0 1.25rem;
-    font-size: 0.8rem;
+    margin: 0.25rem 0 0;
+    font-size: 0.75rem;
     color: #71717a;
   }
 
+  .chart-total {
+    font-size: 0.75rem;
+    color: #71717a;
+    font-variant-numeric: tabular-nums;
+  }
+
   .chart-container {
-    height: 200px;
+    flex: 1;
+    min-height: 160px;
     position: relative;
   }
 
   .center-stat {
     position: absolute;
-    top: 50%;
-    left: 35%;
+    top: 45%;
+    left: 50%;
     transform: translate(-50%, -50%);
     display: flex;
     flex-direction: column;
@@ -169,7 +194,7 @@
   }
 
   .center-label {
-    font-size: 0.7rem;
+    font-size: 0.65rem;
     color: #71717a;
     text-transform: uppercase;
   }
@@ -193,12 +218,12 @@
   }
 
   .summary-label {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     color: #a1a1aa;
   }
 
   .summary-value {
-    font-size: 1rem;
+    font-size: 0.9rem;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
   }

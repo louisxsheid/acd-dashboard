@@ -1,6 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { Chart, registerables } from "chart.js";
+  import {
+    chartColors,
+    chartFonts,
+    tooltipConfig,
+    gridConfig,
+  } from "../chartConfig";
 
   Chart.register(...registerables);
 
@@ -54,14 +60,10 @@
             display: false,
           },
           tooltip: {
-            backgroundColor: "#27273a",
-            titleColor: "#f4f4f5",
-            bodyColor: "#a1a1aa",
-            borderColor: "#3b3b50",
-            borderWidth: 1,
+            ...tooltipConfig,
             callbacks: {
               label: function (context) {
-                const value = context.parsed.y;
+                const value = context.parsed.y ?? 0;
                 const pct = total > 0 ? ((value / total) * 100).toFixed(1) : "0";
                 return `${value.toLocaleString()} towers (${pct}%)`;
               },
@@ -74,20 +76,18 @@
               display: false,
             },
             ticks: {
-              color: "#71717a",
+              color: chartColors.text.muted,
               font: {
-                size: 11,
+                size: chartFonts.size.sm,
               },
             },
           },
           y: {
-            grid: {
-              color: "#27273a",
-            },
+            grid: gridConfig,
             ticks: {
-              color: "#71717a",
+              color: chartColors.text.muted,
               font: {
-                size: 10,
+                size: chartFonts.size.xs,
               },
               callback: function (value) {
                 return Number(value).toLocaleString();
@@ -117,12 +117,12 @@
 </script>
 
 <div class="timeline-chart">
-  <h3>{title}</h3>
+  <div class="chart-header">
+    <h3>{title}</h3>
+    <span class="chart-total">{total.toLocaleString()} total</span>
+  </div>
   <div class="chart-container">
     <canvas bind:this={canvas}></canvas>
-  </div>
-  <div class="total">
-    Total: {total.toLocaleString()}
   </div>
 </div>
 
@@ -131,26 +131,34 @@
     background: #1e1e2e;
     border-radius: 12px;
     padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    min-height: 280px;
+  }
+
+  .chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
   }
 
   h3 {
-    margin: 0 0 1.25rem;
-    font-size: 1rem;
+    margin: 0;
+    font-size: 0.9rem;
     color: #f4f4f5;
     font-weight: 600;
   }
 
-  .chart-container {
-    height: 200px;
-    position: relative;
+  .chart-total {
+    font-size: 0.75rem;
+    color: #71717a;
+    font-variant-numeric: tabular-nums;
   }
 
-  .total {
-    margin-top: 1rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid #27273a;
-    font-size: 0.875rem;
-    color: #a1a1aa;
-    text-align: right;
+  .chart-container {
+    flex: 1;
+    min-height: 220px;
+    position: relative;
   }
 </style>
