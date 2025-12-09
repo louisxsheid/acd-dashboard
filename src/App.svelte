@@ -28,6 +28,7 @@
   import NetworkInsights from "./lib/components/NetworkInsights.svelte";
   import BandFingerprinting from "./lib/components/BandFingerprinting.svelte";
   import CarrierBands from "./lib/components/CarrierBands.svelte";
+  import { getCarrierName, getCarrierColorByName } from "./lib/carriers";
 
   setContextClient(client);
 
@@ -302,25 +303,42 @@
       { bearing_range: "NW", count: data.bearing_nw?.aggregate?.count || 0 },
     ];
 
-    // Per-carrier bearing data for radar charts
-    const carrierBearings = (data.providers || [])
-      .filter((p: any) => (p.cells_with_bearing?.aggregate?.count || 0) > 0)
-      .map((p: any) => ({
-        country_id: p.country_id,
-        provider_id: p.provider_id,
-        total: p.cells_with_bearing?.aggregate?.count || 0,
-        bearings: [
-          p.bearing_n?.aggregate?.count || 0,
-          p.bearing_ne?.aggregate?.count || 0,
-          p.bearing_e?.aggregate?.count || 0,
-          p.bearing_se?.aggregate?.count || 0,
-          p.bearing_s?.aggregate?.count || 0,
-          p.bearing_sw?.aggregate?.count || 0,
-          p.bearing_w?.aggregate?.count || 0,
-          p.bearing_nw?.aggregate?.count || 0,
-        ],
-      }))
-      .sort((a: any, b: any) => b.total - a.total);
+    // Per-carrier bearing data for radar charts - aggregate by carrier display name
+    const carrierBearingMap = new Map<string, {
+      name: string;
+      color: string;
+      total: number;
+      bearings: number[];
+    }>();
+
+    (data.providers || []).forEach((p: any) => {
+      const total = p.cells_with_bearing?.aggregate?.count || 0;
+      if (total === 0) return;
+
+      const name = getCarrierName(p.country_id, p.provider_id);
+      const color = getCarrierColorByName(name);
+      const bearings = [
+        p.bearing_n?.aggregate?.count || 0,
+        p.bearing_ne?.aggregate?.count || 0,
+        p.bearing_e?.aggregate?.count || 0,
+        p.bearing_se?.aggregate?.count || 0,
+        p.bearing_s?.aggregate?.count || 0,
+        p.bearing_sw?.aggregate?.count || 0,
+        p.bearing_w?.aggregate?.count || 0,
+        p.bearing_nw?.aggregate?.count || 0,
+      ];
+
+      if (carrierBearingMap.has(name)) {
+        const existing = carrierBearingMap.get(name)!;
+        existing.total += total;
+        existing.bearings = existing.bearings.map((b, i) => b + bearings[i]);
+      } else {
+        carrierBearingMap.set(name, { name, color, total, bearings });
+      }
+    });
+
+    const carrierBearings = Array.from(carrierBearingMap.values())
+      .sort((a, b) => b.total - a.total);
 
     // Top band combinations per carrier
     const topBandCombos: { band_combo: number[]; carrier_id: number | null; country_id: number | null; provider_id: number | null; tower_count: number }[] = [];

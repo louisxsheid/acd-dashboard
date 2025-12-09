@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { Chart, registerables } from "chart.js";
-  import { getCarrierName, getCarrierColor } from "../carriers";
+  import { getCarrierName, getCarrierColor, getCarrierColorByName } from "../carriers";
   import {
     chartColors,
     chartFonts,
@@ -58,21 +58,43 @@
   let comboCanvas: HTMLCanvasElement;
   let comboChart: Chart | null = null;
 
-  let sortedCarriers = $derived(
-    [...carriers]
-      .map((c) => ({
-        ...c,
-        name: getCarrierName(c.country_id, c.provider_id),
-        color: getCarrierColor(c.country_id, c.provider_id),
-        total: c.tower_providers_aggregate.aggregate.count,
-        endc: c.endc_tower_providers.aggregate.count,
-        lte: c.lte_tower_providers.aggregate.count,
-        nr: c.nr_tower_providers.aggregate.count,
-      }))
+  // Aggregate carriers by display name (combines multiple MCC-MNC codes)
+  function aggregateCarriers() {
+    const carrierMap = new Map<string, {
+      name: string;
+      color: string;
+      total: number;
+      endc: number;
+      lte: number;
+      nr: number;
+    }>();
+
+    carriers.forEach((c) => {
+      const name = getCarrierName(c.country_id, c.provider_id);
+      const color = getCarrierColorByName(name);
+      const total = c.tower_providers_aggregate.aggregate.count;
+      const endc = c.endc_tower_providers.aggregate.count;
+      const lte = c.lte_tower_providers.aggregate.count;
+      const nr = c.nr_tower_providers.aggregate.count;
+
+      if (carrierMap.has(name)) {
+        const existing = carrierMap.get(name)!;
+        existing.total += total;
+        existing.endc += endc;
+        existing.lte += lte;
+        existing.nr += nr;
+      } else {
+        carrierMap.set(name, { name, color, total, endc, lte, nr });
+      }
+    });
+
+    return Array.from(carrierMap.values())
       .filter((c) => c.total > 0)
       .sort((a, b) => b.endc - a.endc)
-      .slice(0, 4)
-  );
+      .slice(0, 4);
+  }
+
+  let sortedCarriers = $derived(aggregateCarriers());
 
   function pct(value: number, total: number): string {
     if (total === 0) return "0%";

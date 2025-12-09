@@ -130,3 +130,48 @@ export function getCarrierColor(countryId: number, providerId: number): string {
 
   return "#6b7280";
 }
+
+export function getCarrierColorByName(name: string): string {
+  if (name.includes("Verizon")) return "#cd040b";
+  if (name.includes("AT&T")) return "#00a8e0";
+  if (name.includes("T-Mobile")) return "#e20074";
+  if (name.includes("Sprint")) return "#ffe100";
+  if (name.includes("US Cellular")) return "#0057b8";
+  if (name.includes("Dish")) return "#ec1c24";
+  if (name.includes("FirstNet")) return "#003366";
+
+  return "#6b7280";
+}
+
+/**
+ * Aggregate carrier data by display name (combines multiple MCC-MNC codes).
+ * Pass in an array of items with country_id/provider_id, and numeric fields to sum.
+ * Returns aggregated data keyed by carrier display name.
+ */
+export function aggregateByCarrier<T extends { country_id: number; provider_id: number }>(
+  items: T[],
+  numericFields: (keyof T)[]
+): Array<{ name: string; color: string } & Record<string, number>> {
+  const carrierMap = new Map<string, { name: string; color: string } & Record<string, number>>();
+
+  items.forEach((item) => {
+    const name = getCarrierName(item.country_id, item.provider_id);
+    const color = getCarrierColorByName(name);
+
+    if (carrierMap.has(name)) {
+      const existing = carrierMap.get(name)!;
+      numericFields.forEach((field) => {
+        const val = (item[field] as number) || 0;
+        existing[field as string] = (existing[field as string] || 0) + val;
+      });
+    } else {
+      const entry: { name: string; color: string } & Record<string, number> = { name, color };
+      numericFields.forEach((field) => {
+        entry[field as string] = (item[field] as number) || 0;
+      });
+      carrierMap.set(name, entry);
+    }
+  });
+
+  return Array.from(carrierMap.values());
+}

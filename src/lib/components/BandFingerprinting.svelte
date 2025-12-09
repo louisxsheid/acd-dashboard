@@ -43,8 +43,8 @@
   }
 
   interface CarrierBearingData {
-    country_id: number;
-    provider_id: number;
+    name: string;
+    color: string;
     total: number;
     bearings: number[];
   }
@@ -140,7 +140,7 @@
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const color = getCarrierColor(carrier.country_id, carrier.provider_id);
+    const color = carrier.color;
     const total = carrier.bearings.reduce((sum, b) => sum + b, 0);
     const data = carrier.bearings.map(b => total > 0 ? (b / total) * 100 : 0);
 
@@ -228,38 +228,34 @@
     const ctx = bandsBarCanvas.getContext("2d");
     if (!ctx) return;
 
-    const allCarriers = new Map<string, { country_id: number; provider_id: number; color: string; name: string }>();
-    bandsPerTower.forEach(item => {
+    // Aggregate carrier data by display name
+    const carrierDataMap = new Map<string, { color: string; name: string; dataByBands: number[] }>();
+
+    bandsPerTower.slice(0, 8).forEach((item, bandIndex) => {
       item.by_carrier?.forEach(c => {
-        const key = `${c.country_id}-${c.provider_id}`;
-        if (!allCarriers.has(key)) {
-          allCarriers.set(key, {
-            country_id: c.country_id,
-            provider_id: c.provider_id,
-            color: getCarrierColor(c.country_id, c.provider_id),
-            name: getCarrierName(c.country_id, c.provider_id),
+        const name = getCarrierName(c.country_id, c.provider_id);
+        const color = getCarrierColor(c.country_id, c.provider_id);
+
+        if (!carrierDataMap.has(name)) {
+          carrierDataMap.set(name, {
+            name,
+            color,
+            dataByBands: new Array(8).fill(0),
           });
         }
+        const existing = carrierDataMap.get(name)!;
+        existing.dataByBands[bandIndex] += c.count;
       });
     });
 
-    const carrierTotals = new Map<string, number>();
-    bandsPerTower.forEach(item => {
-      item.by_carrier?.forEach(c => {
-        const key = `${c.country_id}-${c.provider_id}`;
-        carrierTotals.set(key, (carrierTotals.get(key) || 0) + c.count);
-      });
-    });
-
-    const sortedCarriers = Array.from(allCarriers.entries())
-      .sort((a, b) => (carrierTotals.get(b[0]) || 0) - (carrierTotals.get(a[0]) || 0))
+    // Sort by total count
+    const sortedCarriers = Array.from(carrierDataMap.values())
+      .map(c => ({ ...c, total: c.dataByBands.reduce((sum, n) => sum + n, 0) }))
+      .sort((a, b) => b.total - a.total)
       .slice(0, 4);
 
-    const datasets = sortedCarriers.map(([key, carrier]) => {
-      const data = bandsPerTower.slice(0, 8).map(item => {
-        const found = item.by_carrier?.find(c => `${c.country_id}-${c.provider_id}` === key);
-        return found?.count || 0;
-      });
+    const datasets = sortedCarriers.map((carrier) => {
+      const data = carrier.dataByBands;
 
       return {
         label: carrier.name,
@@ -558,12 +554,10 @@
 
       <div class="radar-grid">
         {#each topCarriers as carrier, i}
-          {@const color = getCarrierColor(carrier.country_id, carrier.provider_id)}
-          {@const name = getCarrierName(carrier.country_id, carrier.provider_id)}
           <div class="radar-card">
             <div class="radar-card-header">
-              <span class="carrier-dot" style="background: {color}"></span>
-              <span class="carrier-name">{name}</span>
+              <span class="carrier-dot" style="background: {carrier.color}"></span>
+              <span class="carrier-name">{carrier.name}</span>
               <span class="carrier-count">{carrier.total.toLocaleString()} cells</span>
             </div>
             <div class="radar-chart-container">

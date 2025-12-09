@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { Chart, registerables } from "chart.js";
-  import { getCarrierName, getCarrierColor } from "../carriers";
+  import { getCarrierName, getCarrierColor, getCarrierColorByName } from "../carriers";
   import {
     chartColors,
     chartFonts,
@@ -45,18 +45,75 @@
   let bandsBarCanvas: HTMLCanvasElement;
   let bandsBarChart: Chart | null = null;
 
-  let sortedCarriers = $derived(
-    [...carrierCells]
+  // Aggregate carriers by display name (combines multiple MCC-MNC codes)
+  function aggregateCarriers() {
+    const carrierMap = new Map<string, {
+      name: string;
+      color: string;
+      total_cells: number;
+      cells_with_speed: number;
+      cells_with_snr: number;
+      avg_download_sum: number;
+      avg_download_count: number;
+      max_download: number;
+      avg_snr_sum: number;
+      avg_snr_count: number;
+    }>();
+
+    carrierCells.forEach((c) => {
+      const name = getCarrierName(c.country_id, c.provider_id);
+      const color = getCarrierColorByName(name);
+
+      if (carrierMap.has(name)) {
+        const existing = carrierMap.get(name)!;
+        existing.total_cells += c.total_cells;
+        existing.cells_with_speed += c.cells_with_speed;
+        existing.cells_with_snr += c.cells_with_snr;
+        if (c.avg_download !== null) {
+          existing.avg_download_sum += c.avg_download * c.cells_with_speed;
+          existing.avg_download_count += c.cells_with_speed;
+        }
+        if (c.max_download !== null && c.max_download > existing.max_download) {
+          existing.max_download = c.max_download;
+        }
+        if (c.avg_snr !== null) {
+          existing.avg_snr_sum += c.avg_snr * c.cells_with_snr;
+          existing.avg_snr_count += c.cells_with_snr;
+        }
+      } else {
+        carrierMap.set(name, {
+          name,
+          color,
+          total_cells: c.total_cells,
+          cells_with_speed: c.cells_with_speed,
+          cells_with_snr: c.cells_with_snr,
+          avg_download_sum: c.avg_download !== null ? c.avg_download * c.cells_with_speed : 0,
+          avg_download_count: c.avg_download !== null ? c.cells_with_speed : 0,
+          max_download: c.max_download || 0,
+          avg_snr_sum: c.avg_snr !== null ? c.avg_snr * c.cells_with_snr : 0,
+          avg_snr_count: c.avg_snr !== null ? c.cells_with_snr : 0,
+        });
+      }
+    });
+
+    return Array.from(carrierMap.values())
       .map((c) => ({
-        ...c,
-        name: getCarrierName(c.country_id, c.provider_id),
-        color: getCarrierColor(c.country_id, c.provider_id),
+        name: c.name,
+        color: c.color,
+        total_cells: c.total_cells,
+        cells_with_speed: c.cells_with_speed,
+        avg_download: c.avg_download_count > 0 ? c.avg_download_sum / c.avg_download_count : null,
+        max_download: c.max_download > 0 ? c.max_download : null,
+        cells_with_snr: c.cells_with_snr,
+        avg_snr: c.avg_snr_count > 0 ? c.avg_snr_sum / c.avg_snr_count : null,
         speedCoverage: c.total_cells > 0 ? (c.cells_with_speed / c.total_cells) * 100 : 0,
       }))
       .filter((c) => c.total_cells > 0)
       .sort((a, b) => b.total_cells - a.total_cells)
-      .slice(0, 6)
-  );
+      .slice(0, 6);
+  }
+
+  let sortedCarriers = $derived(aggregateCarriers());
 
   function formatSpeed(speed: number | null): string {
     if (speed === null) return "—";
