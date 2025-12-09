@@ -27,6 +27,7 @@
   import CarrierStats from "./lib/components/CarrierStats.svelte";
   import NetworkInsights from "./lib/components/NetworkInsights.svelte";
   import BandFingerprinting from "./lib/components/BandFingerprinting.svelte";
+  import CarrierBands from "./lib/components/CarrierBands.svelte";
 
   setContextClient(client);
 
@@ -405,6 +406,26 @@
       cellsWithSignal: data.cells_with_signal_total?.aggregate?.count || 0,
     };
   });
+
+  // Carrier bands data - derived from band fingerprinting query
+  let carrierBandsData = $derived(() => {
+    if (!$bandFingerprintQuery.data?.providers) return null;
+
+    return $bandFingerprintQuery.data.providers.map((p: any) => ({
+      country_id: p.country_id,
+      provider_id: p.provider_id,
+      b2: p.b2?.aggregate?.count || 0,
+      b4: p.b4?.aggregate?.count || 0,
+      b5: p.b5?.aggregate?.count || 0,
+      b12: p.b12?.aggregate?.count || 0,
+      b13: p.b13?.aggregate?.count || 0,
+      b14: p.b14?.aggregate?.count || 0,
+      b30: p.b30?.aggregate?.count || 0,
+      b41: p.b41?.aggregate?.count || 0,
+      b66: p.b66?.aggregate?.count || 0,
+      b71: p.b71?.aggregate?.count || 0,
+    }));
+  });
 </script>
 
 <main>
@@ -635,8 +656,28 @@
         {/if}
       </section>
 
-      <!-- Band Fingerprinting Section -->
+      <!-- Carrier Bands Matrix Section -->
       <section class="full-width-section fade-in-up delay-4">
+        {#if !$bandFingerprintQuery.fetching && $bandFingerprintQuery.data?.providers}
+          {@const bandsData = carrierBandsData()}
+          {#if bandsData && bandsData.length > 0}
+            <CarrierBands carriers={bandsData} />
+          {/if}
+        {:else}
+          <div class="skeleton-card">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-table">
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+            </div>
+          </div>
+        {/if}
+      </section>
+
+      <!-- Band Fingerprinting Section -->
+      <section class="full-width-section fade-in-up delay-5">
         {#if !$bandFingerprintQuery.fetching && $bandFingerprintQuery.data}
           {@const fpData = bandFingerprintingData()}
           {#if fpData}
