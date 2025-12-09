@@ -35,20 +35,70 @@
     { key: "b30", name: "B30", fullName: "WCS", tier: "mid" },
   ] as const;
 
-  let sortedCarriers = $derived(
-    [...carriers]
-      .map((c) => ({
-        ...c,
-        name: getCarrierName(c.country_id, c.provider_id),
-        color: getCarrierColor(c.country_id, c.provider_id),
-        total: (c.b2 || 0) + (c.b4 || 0) + (c.b5 || 0) + (c.b12 || 0) +
-               (c.b13 || 0) + (c.b14 || 0) + (c.b30 || 0) + (c.b41 || 0) +
-               (c.b66 || 0) + (c.b71 || 0),
-      }))
+  // Aggregate carriers by display name (combines multiple MCC-MNC codes for same carrier)
+  function aggregateCarriers() {
+    const carrierMap = new Map<string, {
+      name: string;
+      color: string;
+      b2: number;
+      b4: number;
+      b5: number;
+      b12: number;
+      b13: number;
+      b14: number;
+      b30: number;
+      b41: number;
+      b66: number;
+      b71: number;
+      total: number;
+    }>();
+
+    carriers.forEach((c) => {
+      const name = getCarrierName(c.country_id, c.provider_id);
+      const color = getCarrierColor(c.country_id, c.provider_id);
+
+      if (carrierMap.has(name)) {
+        const existing = carrierMap.get(name)!;
+        existing.b2 += c.b2 || 0;
+        existing.b4 += c.b4 || 0;
+        existing.b5 += c.b5 || 0;
+        existing.b12 += c.b12 || 0;
+        existing.b13 += c.b13 || 0;
+        existing.b14 += c.b14 || 0;
+        existing.b30 += c.b30 || 0;
+        existing.b41 += c.b41 || 0;
+        existing.b66 += c.b66 || 0;
+        existing.b71 += c.b71 || 0;
+        existing.total = existing.b2 + existing.b4 + existing.b5 + existing.b12 +
+                         existing.b13 + existing.b14 + existing.b30 + existing.b41 +
+                         existing.b66 + existing.b71;
+      } else {
+        const b2 = c.b2 || 0;
+        const b4 = c.b4 || 0;
+        const b5 = c.b5 || 0;
+        const b12 = c.b12 || 0;
+        const b13 = c.b13 || 0;
+        const b14 = c.b14 || 0;
+        const b30 = c.b30 || 0;
+        const b41 = c.b41 || 0;
+        const b66 = c.b66 || 0;
+        const b71 = c.b71 || 0;
+        carrierMap.set(name, {
+          name,
+          color,
+          b2, b4, b5, b12, b13, b14, b30, b41, b66, b71,
+          total: b2 + b4 + b5 + b12 + b13 + b14 + b30 + b41 + b66 + b71,
+        });
+      }
+    });
+
+    return Array.from(carrierMap.values())
       .filter((c) => c.total > 0)
       .sort((a, b) => b.total - a.total)
-      .slice(0, 6)
-  );
+      .slice(0, 6);
+  }
+
+  let sortedCarriers = $derived(aggregateCarriers());
 
   // Get bands sorted by total count, filter out zero bands
   let activeBands = $derived(
