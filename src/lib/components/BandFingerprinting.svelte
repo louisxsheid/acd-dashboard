@@ -144,6 +144,13 @@
     const total = carrier.bearings.reduce((sum, b) => sum + b, 0);
     const data = carrier.bearings.map(b => total > 0 ? (b / total) * 100 : 0);
 
+    // Calculate dynamic scale to emphasize differences
+    const minVal = Math.min(...data);
+    const maxVal = Math.max(...data);
+    // Use a scale that starts slightly below min to show variation better
+    const scaleMin = Math.max(0, minVal - 2);
+    const scaleMax = maxVal + 2;
+
     radarCharts[index] = new Chart(ctx, {
       type: "radar",
       data: {
@@ -201,10 +208,9 @@
             },
             ticks: {
               display: false,
-              stepSize: 5,
             },
-            suggestedMin: 0,
-            suggestedMax: 18,
+            min: scaleMin,
+            max: scaleMax,
           },
         },
       },
