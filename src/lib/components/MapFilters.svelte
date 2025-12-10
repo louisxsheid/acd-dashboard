@@ -1,7 +1,19 @@
 <script lang="ts">
-  interface Filters {
+  import { getCarrierName, getCarrierColorByName } from "../carriers";
+
+  export interface Filters {
     rat: string[];
     endc: boolean | null;
+    carriers: number[];
+    towerTypes: string[];
+    providerCount: "all" | "single" | "multi";
+  }
+
+  interface Provider {
+    id: number;
+    country_id: number;
+    provider_id: number;
+    name: string;
   }
 
   interface Props {
@@ -9,9 +21,10 @@
     onFilterChange: (filters: Filters) => void;
     totalCount: number;
     filteredCount: number;
+    providers?: Provider[];
   }
 
-  let { filters, onFilterChange, totalCount, filteredCount }: Props = $props();
+  let { filters, onFilterChange, totalCount, filteredCount, providers = [] }: Props = $props();
 
   const RAT_OPTIONS = [
     { value: "LTE", label: "LTE", color: "#3b82f6" },
@@ -21,11 +34,45 @@
     { value: "GSM", label: "GSM", color: "#22c55e" },
   ];
 
-  const ENDC_OPTIONS = [
+  const ENDC_OPTIONS: { value: boolean | null; label: string }[] = [
     { value: null, label: "All" },
     { value: true, label: "EN-DC Only" },
     { value: false, label: "Non EN-DC" },
   ];
+
+  const TOWER_TYPE_OPTIONS = [
+    { value: "MACRO", label: "Macro", color: "#3b82f6" },
+    { value: "MICRO", label: "Micro", color: "#8b5cf6" },
+    { value: "PICO", label: "Pico", color: "#22c55e" },
+    { value: "DAS", label: "DAS", color: "#f59e0b" },
+    { value: "COW", label: "COW", color: "#ef4444" },
+  ];
+
+  const PROVIDER_COUNT_OPTIONS: { value: "all" | "single" | "multi"; label: string }[] = [
+    { value: "all", label: "All Sites" },
+    { value: "single", label: "Single Carrier" },
+    { value: "multi", label: "Shared Sites" },
+  ];
+
+  // Aggregate providers by carrier name for the filter
+  let carrierOptions = $derived(() => {
+    const carrierMap = new Map<string, { ids: number[]; color: string }>();
+
+    for (const p of providers) {
+      const name = getCarrierName(p.country_id, p.provider_id);
+      const color = getCarrierColorByName(name);
+
+      if (carrierMap.has(name)) {
+        carrierMap.get(name)!.ids.push(p.id);
+      } else {
+        carrierMap.set(name, { ids: [p.id], color });
+      }
+    }
+
+    return Array.from(carrierMap.entries())
+      .map(([name, { ids, color }]) => ({ name, ids, color }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  });
 
   function toggleRAT(rat: string) {
     const newRAT = filters.rat.includes(rat)
@@ -38,67 +85,198 @@
     onFilterChange({ ...filters, endc: value });
   }
 
-  function clearFilters() {
-    onFilterChange({ rat: [], endc: null });
+  function toggleCarrier(carrierIds: number[]) {
+    // Check if ALL ids of this carrier are currently selected
+    const allSelected = carrierIds.every(id => filters.carriers.includes(id));
+
+    let newCarriers: number[];
+    if (allSelected) {
+      // Remove all ids for this carrier
+      newCarriers = filters.carriers.filter(id => !carrierIds.includes(id));
+    } else {
+      // Add all ids for this carrier that aren't already there
+      newCarriers = [...filters.carriers, ...carrierIds.filter(id => !filters.carriers.includes(id))];
+    }
+    onFilterChange({ ...filters, carriers: newCarriers });
   }
 
-  let hasFilters = $derived(filters.rat.length > 0 || filters.endc !== null);
+  function toggleTowerType(type: string) {
+    const newTypes = filters.towerTypes.includes(type)
+      ? filters.towerTypes.filter(t => t !== type)
+      : [...filters.towerTypes, type];
+    onFilterChange({ ...filters, towerTypes: newTypes });
+  }
+
+  function setProviderCount(value: "all" | "single" | "multi") {
+    onFilterChange({ ...filters, providerCount: value });
+  }
+
+  function clearFilters() {
+    onFilterChange({ rat: [], endc: null, carriers: [], towerTypes: [], providerCount: "all" });
+  }
+
+  let hasFilters = $derived(
+    filters.rat.length > 0 ||
+    filters.endc !== null ||
+    filters.carriers.length > 0 ||
+    filters.towerTypes.length > 0 ||
+    filters.providerCount !== "all"
+  );
+
+  // Check if a carrier is selected (any of its provider IDs)
+  function isCarrierSelected(carrierIds: number[]): boolean {
+    return carrierIds.some(id => filters.carriers.includes(id));
+  }
+
+  // Collapsed state for filter sections
+  let showCarriers = $state(false);
+  let showTowerTypes = $state(false);
 </script>
 
 <div class="filters">
-  <div class="filter-section">
-    <div class="filter-label">Technology</div>
-    <div class="filter-chips">
-      {#each RAT_OPTIONS as opt}
-        <button
-          class="chip"
-          class:active={filters.rat.length === 0 || filters.rat.includes(opt.value)}
-          class:inactive={filters.rat.length > 0 && !filters.rat.includes(opt.value)}
-          style="--chip-color: {opt.color}"
-          onclick={() => toggleRAT(opt.value)}
-        >
-          <span class="chip-dot" style="background: {opt.color}"></span>
-          {opt.label}
-        </button>
-      {/each}
+  <div class="filter-row">
+    <div class="filter-section">
+      <div class="filter-label">Technology</div>
+      <div class="filter-chips">
+        {#each RAT_OPTIONS as opt}
+          <button
+            class="chip"
+            class:active={filters.rat.length === 0 || filters.rat.includes(opt.value)}
+            class:inactive={filters.rat.length > 0 && !filters.rat.includes(opt.value)}
+            style="--chip-color: {opt.color}"
+            onclick={() => toggleRAT(opt.value)}
+          >
+            <span class="chip-dot" style="background: {opt.color}"></span>
+            {opt.label}
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="filter-section">
+      <div class="filter-label">EN-DC</div>
+      <div class="filter-chips">
+        {#each ENDC_OPTIONS as opt}
+          <button
+            class="chip"
+            class:active={filters.endc === opt.value}
+            onclick={() => setENDC(opt.value)}
+          >
+            {opt.label}
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="filter-section">
+      <div class="filter-label">Site Type</div>
+      <div class="filter-chips">
+        {#each PROVIDER_COUNT_OPTIONS as opt}
+          <button
+            class="chip"
+            class:active={filters.providerCount === opt.value}
+            onclick={() => setProviderCount(opt.value)}
+          >
+            {opt.label}
+          </button>
+        {/each}
+      </div>
     </div>
   </div>
 
-  <div class="filter-section">
-    <div class="filter-label">EN-DC</div>
-    <div class="filter-chips">
-      {#each ENDC_OPTIONS as opt}
-        <button
-          class="chip"
-          class:active={filters.endc === opt.value}
-          onclick={() => setENDC(opt.value)}
-        >
-          {opt.label}
-        </button>
-      {/each}
-    </div>
-  </div>
-
-  {#if hasFilters}
-    <div class="filter-actions">
-      <button class="clear-btn" onclick={clearFilters}>
-        Clear filters
+  <div class="filter-row">
+    <div class="filter-section expandable">
+      <button
+        class="filter-label-btn"
+        onclick={() => showCarriers = !showCarriers}
+      >
+        <span class="filter-label">Carrier</span>
+        {#if filters.carriers.length > 0}
+          <span class="filter-badge">{filters.carriers.length}</span>
+        {/if}
+        <span class="chevron" class:open={showCarriers}>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+            <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+          </svg>
+        </span>
       </button>
-      <span class="filter-count">
-        {filteredCount.toLocaleString()} / {totalCount.toLocaleString()}
-      </span>
+      {#if showCarriers}
+        <div class="filter-chips carrier-chips">
+          {#each carrierOptions() as carrier}
+            <button
+              class="chip"
+              class:active={isCarrierSelected(carrier.ids)}
+              style="--chip-color: {carrier.color}"
+              onclick={() => toggleCarrier(carrier.ids)}
+            >
+              <span class="chip-dot" style="background: {carrier.color}"></span>
+              {carrier.name}
+            </button>
+          {/each}
+        </div>
+      {/if}
     </div>
-  {/if}
+
+    <div class="filter-section expandable">
+      <button
+        class="filter-label-btn"
+        onclick={() => showTowerTypes = !showTowerTypes}
+      >
+        <span class="filter-label">Tower Type</span>
+        {#if filters.towerTypes.length > 0}
+          <span class="filter-badge">{filters.towerTypes.length}</span>
+        {/if}
+        <span class="chevron" class:open={showTowerTypes}>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+            <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+          </svg>
+        </span>
+      </button>
+      {#if showTowerTypes}
+        <div class="filter-chips">
+          {#each TOWER_TYPE_OPTIONS as opt}
+            <button
+              class="chip"
+              class:active={filters.towerTypes.length === 0 || filters.towerTypes.includes(opt.value)}
+              class:inactive={filters.towerTypes.length > 0 && !filters.towerTypes.includes(opt.value)}
+              style="--chip-color: {opt.color}"
+              onclick={() => toggleTowerType(opt.value)}
+            >
+              <span class="chip-dot" style="background: {opt.color}"></span>
+              {opt.label}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    {#if hasFilters}
+      <div class="filter-actions">
+        <button class="clear-btn" onclick={clearFilters}>
+          Clear all
+        </button>
+        <span class="filter-count">
+          {filteredCount.toLocaleString()} / {totalCount.toLocaleString()}
+        </span>
+      </div>
+    {/if}
+  </div>
 </div>
 
 <style>
   .filters {
     display: flex;
-    flex-wrap: wrap;
-    gap: 1.5rem;
+    flex-direction: column;
+    gap: 0.75rem;
     padding: 1rem 1.5rem;
     background: #1e1e2e;
     border-radius: 12px;
+  }
+
+  .filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
     align-items: flex-start;
   }
 
@@ -106,6 +284,10 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+  }
+
+  .filter-section.expandable {
+    min-width: 120px;
   }
 
   .filter-label {
@@ -116,10 +298,50 @@
     color: #71717a;
   }
 
+  .filter-label-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: inherit;
+  }
+
+  .filter-label-btn:hover .filter-label {
+    color: #a1a1aa;
+  }
+
+  .filter-badge {
+    background: #3b82f6;
+    color: white;
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 0.125rem 0.375rem;
+    border-radius: 9999px;
+    min-width: 1.25rem;
+    text-align: center;
+  }
+
+  .chevron {
+    color: #52525b;
+    transition: transform 0.2s ease;
+    display: flex;
+  }
+
+  .chevron.open {
+    transform: rotate(180deg);
+  }
+
   .filter-chips {
     display: flex;
     flex-wrap: wrap;
     gap: 0.375rem;
+  }
+
+  .carrier-chips {
+    max-width: 500px;
   }
 
   .chip {
@@ -163,6 +385,7 @@
     align-items: center;
     gap: 1rem;
     margin-left: auto;
+    align-self: center;
   }
 
   .clear-btn {

@@ -16,7 +16,13 @@
     CARRIER_STATS,
     NETWORK_INSIGHTS,
     BAND_FINGERPRINTING,
+    PROVIDERS_TOWER_TYPES,
+    PROVIDERS_LIST,
+    ANOMALY_STATS,
+    ANOMALY_VERSIONS,
+    TOP_ANOMALIES,
   } from "./lib/graphql/queries";
+  import type { Filters } from "./lib/components/MapFilters.svelte";
   import StatCard from "./lib/components/StatCard.svelte";
   import BarChart from "./lib/components/BarChart.svelte";
   import DeckGLMap from "./lib/components/DeckGLMap.svelte";
@@ -28,6 +34,8 @@
   import NetworkInsights from "./lib/components/NetworkInsights.svelte";
   import BandFingerprinting from "./lib/components/BandFingerprinting.svelte";
   import CarrierBands from "./lib/components/CarrierBands.svelte";
+  import TowersByProvider from "./lib/components/TowersByProvider.svelte";
+  import AnomalyDetection from "./lib/components/AnomalyDetection.svelte";
   import { getCarrierName, getCarrierColorByName } from "./lib/carriers";
 
   setContextClient(client);
@@ -48,6 +56,101 @@
   const carrierStatsQuery = queryStore({ client, query: CARRIER_STATS });
   const networkInsightsQuery = queryStore({ client, query: NETWORK_INSIGHTS });
   const bandFingerprintQuery = queryStore({ client, query: BAND_FINGERPRINTING });
+  const providerTowerTypesQuery = queryStore({ client, query: PROVIDERS_TOWER_TYPES });
+
+  // Anomaly detection state
+  let anomalySelectedVersion = $state("gnn-link-pred-v1");
+  let anomalyVersions: { model_version: string; run_id: string | null; created_at: string | null }[] = $state([]);
+  let anomalyStats = $state({
+    total: 0,
+    mean: 0,
+    std: 0,
+    min: 0,
+    max: 0,
+    above95: 0,
+    above99: 0,
+    run_id: null as string | null,
+    created_at: null as string | null,
+  });
+  let topAnomalies: any[] = $state([]);
+  let anomalyLoading = $state(false);
+
+  async function loadAnomalyVersions() {
+    const result = await client.query(ANOMALY_VERSIONS, {}).toPromise();
+    if (result.data?.tower_anomaly_scores) {
+      anomalyVersions = result.data.tower_anomaly_scores;
+      if (anomalyVersions.length > 0) {
+        anomalySelectedVersion = anomalyVersions[0].model_version;
+        loadAnomalyData();
+      }
+    }
+  }
+
+  async function loadAnomalyData() {
+    anomalyLoading = true;
+    try {
+      const [statsResult, topResult] = await Promise.all([
+        client.query(ANOMALY_STATS, { model_version: anomalySelectedVersion }).toPromise(),
+        client.query(TOP_ANOMALIES, {
+          model_version: anomalySelectedVersion,
+          limit: 50,
+          min_percentile: 90,
+        }).toPromise(),
+      ]);
+
+      if (statsResult.data) {
+        const agg = statsResult.data.tower_anomaly_scores_aggregate?.aggregate || {};
+        const above95 = statsResult.data.above_95?.aggregate?.count || 0;
+        const above99 = statsResult.data.above_99?.aggregate?.count || 0;
+        const meta = statsResult.data.tower_anomaly_scores?.[0] || {};
+
+        anomalyStats = {
+          total: agg.count || 0,
+          mean: agg.avg?.anomaly_score || 0,
+          std: agg.stddev?.anomaly_score || 0,
+          min: agg.min?.anomaly_score || 0,
+          max: agg.max?.anomaly_score || 0,
+          above95,
+          above99,
+          run_id: meta.run_id,
+          created_at: meta.created_at,
+        };
+      }
+
+      if (topResult.data?.tower_anomaly_scores) {
+        topAnomalies = topResult.data.tower_anomaly_scores;
+      }
+    } finally {
+      anomalyLoading = false;
+    }
+  }
+
+  function handleAnomalyVersionChange(version: string) {
+    anomalySelectedVersion = version;
+    loadAnomalyData();
+  }
+
+  function handleAnomalyTowerClick(anomaly: any) {
+    // Switch to map view and zoom to tower location
+    activeTab = "map";
+    const lat = anomaly.tower?.latitude || anomaly.tower_latitude;
+    const lng = anomaly.tower?.longitude || anomaly.tower_longitude;
+    if (lat && lng) {
+      mapBounds = {
+        minLat: lat - 0.01,
+        maxLat: lat + 0.01,
+        minLng: lng - 0.01,
+        maxLng: lng + 0.01,
+        zoom: 15,
+      };
+      loadMapData();
+    }
+  }
+
+  // Load anomaly versions on mount
+  $effect(() => {
+    loadAnomalyVersions();
+  });
 
   // Map state
   let mapBounds = $state({
@@ -61,10 +164,17 @@
   let mapTowers: any[] = $state([]);
   let mapTotalCount = $state(0);
   let mapLoading = $state(false);
-  let mapFilters = $state<{ rat: string[]; endc: boolean | null }>({
+  let mapFilters = $state<Filters>({
     rat: [],
     endc: null,
+    carriers: [],
+    towerTypes: [],
+    providerCount: "all",
   });
+
+  // Providers for map filters
+  const providersQuery = queryStore({ client, query: PROVIDERS_LIST });
+  let providers = $derived($providersQuery.data?.providers || []);
 
   // Determine which cluster level to use based on zoom
   // Switch to individual towers at city level (~zoom 9) for actual locations
@@ -138,8 +248,15 @@
     }, 200);
   }
 
-  function handleFilterChange(newFilters: typeof mapFilters) {
+  let filterTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  function handleFilterChange(newFilters: Filters) {
     mapFilters = newFilters;
+    // Debounce filter changes to avoid hammering the server
+    if (filterTimeout) clearTimeout(filterTimeout);
+    filterTimeout = setTimeout(() => {
+      loadMapData();
+    }, 300);
   }
 
   // Derived data for charts
@@ -444,6 +561,28 @@
       b71: p.b71?.aggregate?.count || 0,
     }));
   });
+
+  // Provider tower types data
+  let providerTowerTypesData = $derived(() => {
+    if (!$providerTowerTypesQuery.data?.providers) return null;
+
+    const providers = $providerTowerTypesQuery.data.providers.map((p: any) => ({
+      country_id: p.country_id,
+      provider_id: p.provider_id,
+      name: p.name,
+      total: p.tower_providers_aggregate?.aggregate?.count || 0,
+      macro: p.macro_towers?.aggregate?.count || 0,
+      micro: p.micro_towers?.aggregate?.count || 0,
+      pico: p.pico_towers?.aggregate?.count || 0,
+      das: p.das_towers?.aggregate?.count || 0,
+      cow: p.cow_towers?.aggregate?.count || 0,
+      other: p.other_towers?.aggregate?.count || 0,
+    }));
+
+    const totalTowers = providers.reduce((sum: number, p: any) => sum + p.total, 0);
+
+    return { providers, totalTowers };
+  });
 </script>
 
 <main>
@@ -648,6 +787,29 @@
         {/if}
       </section>
 
+      <!-- Tower Distribution by Provider Section -->
+      <section class="full-width-section fade-in-up delay-3">
+        {#if !$providerTowerTypesQuery.fetching && $providerTowerTypesQuery.data?.providers}
+          {@const towerTypesData = providerTowerTypesData()}
+          {#if towerTypesData}
+            <TowersByProvider
+              providers={towerTypesData.providers}
+              totalTowers={towerTypesData.totalTowers}
+            />
+          {/if}
+        {:else}
+          <div class="skeleton-card">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-stats-grid">
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+            </div>
+          </div>
+        {/if}
+      </section>
+
       <!-- Network Insights Section -->
       <section class="full-width-section fade-in-up delay-3">
         {#if !$networkInsightsQuery.fetching && $networkInsightsQuery.data?.providers}
@@ -723,6 +885,35 @@
         {/if}
       </section>
 
+      <!-- GNN Anomaly Detection Section -->
+      <section class="full-width-section fade-in-up delay-5">
+        {#if anomalyLoading}
+          <div class="skeleton-card">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-stats-grid">
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+            </div>
+          </div>
+        {:else if anomalyVersions.length > 0}
+          <AnomalyDetection
+            stats={anomalyStats}
+            topAnomalies={topAnomalies}
+            versions={anomalyVersions}
+            selectedVersion={anomalySelectedVersion}
+            onVersionChange={handleAnomalyVersionChange}
+            onTowerClick={handleAnomalyTowerClick}
+          />
+        {:else}
+          <div class="anomaly-empty">
+            <h3>GNN Anomaly Detection</h3>
+            <p>No anomaly detection data available. Run the GNN inference pipeline to generate anomaly scores.</p>
+          </div>
+        {/if}
+      </section>
+
       {:else if activeTab === "map"}
       <section class="map-section">
         <MapFilters
@@ -730,6 +921,7 @@
           onFilterChange={handleFilterChange}
           totalCount={mapTotalCount}
           filteredCount={mapClusters.length > 0 ? mapClusters.length : mapTowers.length}
+          {providers}
         />
         <DeckGLMap
           towers={mapTowers}
@@ -1118,5 +1310,24 @@
     .charts-grid {
       grid-template-columns: 1fr;
     }
+  }
+
+  .anomaly-empty {
+    background: #1e1e2e;
+    border-radius: 12px;
+    padding: 2rem;
+    text-align: center;
+  }
+
+  .anomaly-empty h3 {
+    margin: 0 0 0.5rem;
+    font-size: 1.25rem;
+    color: #f4f4f5;
+  }
+
+  .anomaly-empty p {
+    margin: 0;
+    color: #71717a;
+    font-size: 0.875rem;
   }
 </style>

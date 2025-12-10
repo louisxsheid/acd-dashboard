@@ -10,7 +10,9 @@
     id: number;
     rat: string | null;
     endc_available: boolean;
+    provider_id: number;
     provider: {
+      id: number;
       country_id: number;
       provider_id: number;
     } | null;
@@ -31,6 +33,27 @@
     return tower.tower_providers?.[0]?.rat ?? null;
   }
 
+  // Helper to get primary provider info
+  function getTowerCarrier(tower: Tower): { countryId: number; providerId: number } | null {
+    const provider = tower.tower_providers?.[0]?.provider;
+    if (!provider) return null;
+    return { countryId: provider.country_id, providerId: provider.provider_id };
+  }
+
+  // Get carrier name from MCC-MNC
+  function getCarrierName(countryId: number, providerId: number): string {
+    const key = `${countryId}-${providerId}`;
+    const names: Record<string, string> = {
+      "310-410": "AT&T", "310-070": "AT&T", "310-150": "AT&T",
+      "311-480": "Verizon", "310-004": "Verizon", "310-012": "Verizon",
+      "310-260": "T-Mobile", "310-200": "T-Mobile", "310-210": "T-Mobile",
+      "311-220": "US Cellular", "311-221": "US Cellular",
+      "311-012": "Dish", "312-680": "Dish",
+      "313-100": "FirstNet",
+    };
+    return names[key] || `${countryId}-${providerId}`;
+  }
+
   interface Cluster {
     lat: number;
     lng: number;
@@ -43,6 +66,9 @@
   interface Filters {
     rat: string[];
     endc: boolean | null;
+    carriers: number[];
+    towerTypes: string[];
+    providerCount: "all" | "single" | "multi";
   }
 
   interface Props {
@@ -70,7 +96,17 @@
 
   const HEATMAP_THRESHOLD = 9; // Switch to points at city level (matches cluster query threshold)
 
-  // RAT colors
+  // Carrier colors - more distinctive palette
+  const CARRIER_COLORS: Record<string, [number, number, number]> = {
+    "AT&T": [0, 168, 224],       // AT&T Blue
+    "Verizon": [205, 4, 11],     // Verizon Red
+    "T-Mobile": [226, 0, 116],   // T-Mobile Magenta
+    "US Cellular": [0, 87, 184], // US Cellular Blue
+    "Dish": [236, 28, 36],       // Dish Red
+    "FirstNet": [0, 51, 102],    // FirstNet Navy
+  };
+
+  // RAT colors (fallback)
   const RAT_COLORS: Record<string, [number, number, number]> = {
     LTE: [59, 130, 246],    // Blue
     NR: [139, 92, 246],     // Purple
@@ -78,6 +114,33 @@
     CDMA: [245, 158, 11],   // Amber
     UMTS: [236, 72, 153],   // Pink
   };
+
+  function getCarrierColor(countryId: number, providerId: number): [number, number, number] {
+    const name = getCarrierName(countryId, providerId);
+    // Check if carrier name contains known carrier
+    for (const [carrier, color] of Object.entries(CARRIER_COLORS)) {
+      if (name.includes(carrier)) return color;
+    }
+    return [113, 113, 122]; // Gray default
+  }
+
+  function getTowerColor(tower: Tower): [number, number, number] {
+    // Decommissioned towers are always gray
+    if (tower.tower_type === "DECOMMISSIONED") {
+      return [113, 113, 122]; // Gray
+    }
+    // Multi-provider towers get a special color
+    if (tower.provider_count > 1) {
+      return [251, 191, 36]; // Amber for shared sites
+    }
+    // Color by carrier
+    const carrier = getTowerCarrier(tower);
+    if (carrier) {
+      return getCarrierColor(carrier.countryId, carrier.providerId);
+    }
+    // Fallback to RAT color
+    return RAT_COLORS[getTowerRAT(tower) || ""] || [113, 113, 122];
+  }
 
   function getRATColor(rat: string | null): [number, number, number] {
     return RAT_COLORS[rat || ""] || [113, 113, 122]; // Gray default
@@ -87,14 +150,37 @@
   let filteredTowers = $derived(() => {
     let result = towers;
 
+    // RAT filter
     if (filters.rat.length > 0) {
       result = result.filter(t => filters.rat.includes(getTowerRAT(t) || ""));
     }
 
+    // EN-DC filter
     if (filters.endc === true) {
       result = result.filter(t => t.endc_available);
     } else if (filters.endc === false) {
       result = result.filter(t => !t.endc_available);
+    }
+
+    // Carrier filter - filter by provider internal IDs (providers.id)
+    if (filters.carriers.length > 0) {
+      result = result.filter(t =>
+        t.tower_providers.some(tp =>
+          tp.provider && filters.carriers.includes(tp.provider.id)
+        )
+      );
+    }
+
+    // Tower type filter
+    if (filters.towerTypes.length > 0) {
+      result = result.filter(t => filters.towerTypes.includes(t.tower_type || ""));
+    }
+
+    // Provider count filter (single vs multi-carrier sites)
+    if (filters.providerCount === "single") {
+      result = result.filter(t => t.provider_count === 1);
+    } else if (filters.providerCount === "multi") {
+      result = result.filter(t => t.provider_count > 1);
     }
 
     return result;
@@ -158,8 +244,8 @@
   function createTowerLayers(data: Tower[], zoom: number) {
     // Always show individual points when we have tower data (zoom >= 9)
     // Adjust point size based on zoom level for better visibility
-    const radiusMinPixels = zoom < 10 ? 3 : zoom < 12 ? 4 : 5;
-    const radiusMaxPixels = zoom < 10 ? 6 : zoom < 12 ? 10 : 14;
+    const radiusMinPixels = zoom < 10 ? 4 : zoom < 12 ? 5 : 6;
+    const radiusMaxPixels = zoom < 10 ? 8 : zoom < 12 ? 12 : 16;
 
     return [
       new ScatterplotLayer({
@@ -167,14 +253,22 @@
         data,
         getPosition: (d: Tower) => [d.longitude, d.latitude],
         getRadius: 50,
-        getFillColor: (d: Tower) => [...getRATColor(getTowerRAT(d)), zoom < 10 ? 180 : 200],
-        getLineColor: (d: Tower) => d.endc_available ? [255, 255, 255, 255] : [...getRATColor(getTowerRAT(d)), 255],
-        getLineWidth: (d: Tower) => d.endc_available ? 2 : 0,
+        getFillColor: (d: Tower) => [...getTowerColor(d), zoom < 10 ? 200 : 220],
+        getLineColor: (d: Tower) => {
+          if (d.endc_available) return [255, 255, 255, 255]; // White ring for EN-DC
+          if (d.provider_count > 1) return [30, 30, 30, 255]; // Dark ring for shared
+          return [...getTowerColor(d), 255];
+        },
+        getLineWidth: (d: Tower) => (d.endc_available || d.provider_count > 1) ? 2 : 0,
         radiusMinPixels,
         radiusMaxPixels,
         lineWidthMinPixels: 1,
         pickable: true,
         stroked: true,
+        updateTriggers: {
+          getFillColor: [zoom],
+          getLineColor: [zoom],
+        },
       }),
     ];
   }
@@ -270,12 +364,49 @@
         layers: [],
         getTooltip: ({ object }: any) => {
           if (!object) return null;
-          const rat = object.tower_providers?.[0]?.rat || "Unknown";
+
+          const tower = object as Tower;
+          const providers = tower.tower_providers || [];
+          const primaryProvider = providers[0];
+          const rat = primaryProvider?.rat || "Unknown";
+          const carrier = primaryProvider?.provider
+            ? getCarrierName(primaryProvider.provider.country_id, primaryProvider.provider.provider_id)
+            : "Unknown";
+
+          // Build carrier list for multi-provider sites
+          const carrierList = providers
+            .map(tp => tp.provider ? getCarrierName(tp.provider.country_id, tp.provider.provider_id) : null)
+            .filter((v, i, a) => v && a.indexOf(v) === i) // unique
+            .join(", ");
+
+          const towerType = tower.tower_type || "Unknown";
+          const color = getTowerColor(tower);
+          const colorHex = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+
           return {
-            html: `<div style="background: #1e1e2e; color: #f4f4f5; padding: 8px 12px; border-radius: 6px; font-family: system-ui; font-size: 13px;">
-              <strong>#${object.id}</strong><br/>
-              ${rat} ${object.endc_available ? "(EN-DC)" : ""}<br/>
-              <span style="color: #71717a; font-size: 11px;">${object.latitude.toFixed(5)}, ${object.longitude.toFixed(5)}</span>
+            html: `<div style="background: #1e1e2e; color: #f4f4f5; padding: 12px 16px; border-radius: 8px; font-family: system-ui; font-size: 13px; min-width: 200px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <strong style="font-size: 14px;">Tower #${tower.id}</strong>
+                <span style="background: ${colorHex}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">${rat}</span>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 4px;">
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="color: #71717a;">Carrier</span>
+                  <span style="font-weight: 500;">${tower.provider_count > 1 ? `${tower.provider_count} carriers` : carrier}</span>
+                </div>
+                ${tower.provider_count > 1 ? `<div style="color: #a1a1aa; font-size: 11px; margin-left: auto;">${carrierList}</div>` : ""}
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="color: #71717a;">Type</span>
+                  <span>${towerType}</span>
+                </div>
+                ${tower.endc_available ? `<div style="display: flex; justify-content: space-between;">
+                  <span style="color: #71717a;">5G</span>
+                  <span style="color: #8b5cf6; font-weight: 600;">EN-DC Enabled</span>
+                </div>` : ""}
+              </div>
+              <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #27273a; font-family: monospace; font-size: 11px; color: #52525b;">
+                ${tower.latitude.toFixed(6)}, ${tower.longitude.toFixed(6)}
+              </div>
             </div>`,
             style: {
               backgroundColor: "transparent",
@@ -381,7 +512,7 @@
     <div bind:this={container} class="map"></div>
     <div class="legend">
       <div class="legend-title">
-        {displayMode === "heatmap" ? "Density" : "Technology"}
+        {displayMode === "heatmap" ? "Density" : "Carriers"}
       </div>
       {#if displayMode === "heatmap"}
         <div class="heatmap-legend">
@@ -393,28 +524,28 @@
         </div>
       {:else}
         <div class="legend-item">
-          <span class="legend-dot" style="background: rgb(59, 130, 246)"></span> LTE
+          <span class="legend-dot" style="background: rgb(0, 168, 224)"></span> AT&T
         </div>
         <div class="legend-item">
-          <span class="legend-dot" style="background: rgb(139, 92, 246)"></span> 5G NR
+          <span class="legend-dot" style="background: rgb(205, 4, 11)"></span> Verizon
         </div>
         <div class="legend-item">
-          <span class="legend-dot" style="background: rgb(236, 72, 153)"></span> UMTS
+          <span class="legend-dot" style="background: rgb(226, 0, 116)"></span> T-Mobile
         </div>
         <div class="legend-item">
-          <span class="legend-dot" style="background: rgb(245, 158, 11)"></span> CDMA
-        </div>
-        <div class="legend-item">
-          <span class="legend-dot" style="background: rgb(34, 197, 94)"></span> GSM
+          <span class="legend-dot" style="background: rgb(0, 87, 184)"></span> US Cellular
         </div>
         <div class="legend-divider"></div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background: rgb(251, 191, 36)"></span> Shared Site
+        </div>
         <div class="legend-item">
           <span class="legend-dot endc"></span> EN-DC
         </div>
       {/if}
       <div class="legend-divider"></div>
       <div class="legend-hint">
-        {displayMode === "heatmap" ? "Zoom to city level for tower locations" : "Zoom out for density view"}
+        {displayMode === "heatmap" ? "Zoom to city level for tower locations" : "Hover for details"}
       </div>
     </div>
   </div>

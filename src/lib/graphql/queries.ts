@@ -148,6 +148,18 @@ export const RECENT_TOWERS = gql`
   }
 `;
 
+// Simple providers list for map filters
+export const PROVIDERS_LIST = gql`
+  query ProvidersList {
+    providers(order_by: { name: asc }) {
+      id
+      country_id
+      provider_id
+      name
+    }
+  }
+`;
+
 // Providers with tower stats via tower_providers junction table
 export const PROVIDERS_WITH_STATS = gql`
   query ProvidersWithStats {
@@ -168,6 +180,55 @@ export const PROVIDERS_WITH_STATS = gql`
         }
       }
       nr_tower_providers: tower_providers_aggregate(where: { rat: { _eq: "NR" } }) {
+        aggregate {
+          count
+        }
+      }
+    }
+  }
+`;
+
+// Providers with tower counts by site type
+export const PROVIDERS_TOWER_TYPES = gql`
+  query ProvidersTowerTypes {
+    providers(order_by: { id: asc }) {
+      id
+      country_id
+      provider_id
+      name
+      # Total towers for this provider
+      tower_providers_aggregate {
+        aggregate {
+          count
+        }
+      }
+      # Tower types - need to join through tower_providers to towers
+      macro_towers: tower_providers_aggregate(where: { tower: { tower_type: { _eq: "MACRO" } } }) {
+        aggregate {
+          count
+        }
+      }
+      micro_towers: tower_providers_aggregate(where: { tower: { tower_type: { _eq: "MICRO" } } }) {
+        aggregate {
+          count
+        }
+      }
+      pico_towers: tower_providers_aggregate(where: { tower: { tower_type: { _eq: "PICO" } } }) {
+        aggregate {
+          count
+        }
+      }
+      das_towers: tower_providers_aggregate(where: { tower: { tower_type: { _eq: "DAS" } } }) {
+        aggregate {
+          count
+        }
+      }
+      cow_towers: tower_providers_aggregate(where: { tower: { tower_type: { _eq: "COW" } } }) {
+        aggregate {
+          count
+        }
+      }
+      other_towers: tower_providers_aggregate(where: { tower: { tower_type: { _is_null: true } } }) {
         aggregate {
           count
         }
@@ -243,7 +304,9 @@ export const TOWERS_IN_BOUNDS = gql`
         id
         rat
         endc_available
+        provider_id
         provider {
+          id
           country_id
           provider_id
         }
@@ -864,6 +927,119 @@ export const BAND_FINGERPRINTING = gql`
       bearing_w: cells_aggregate(where: { bearing: { _gte: 248, _lt: 293 } }) { aggregate { count } }
       bearing_nw: cells_aggregate(where: { bearing: { _gte: 293, _lt: 337 } }) { aggregate { count } }
       cells_with_bearing: cells_aggregate(where: { bearing: { _is_null: false } }) { aggregate { count } }
+    }
+  }
+`;
+
+// GNN Anomaly Detection queries
+export const ANOMALY_STATS = gql`
+  query AnomalyStats($model_version: String!) {
+    tower_anomaly_scores_aggregate(where: { model_version: { _eq: $model_version } }) {
+      aggregate {
+        count
+        avg { anomaly_score }
+        stddev { anomaly_score }
+        min { anomaly_score }
+        max { anomaly_score }
+      }
+    }
+    above_95: tower_anomaly_scores_aggregate(where: {
+      model_version: { _eq: $model_version }
+      percentile: { _gt: 95 }
+    }) {
+      aggregate { count }
+    }
+    above_99: tower_anomaly_scores_aggregate(where: {
+      model_version: { _eq: $model_version }
+      percentile: { _gt: 99 }
+    }) {
+      aggregate { count }
+    }
+    tower_anomaly_scores(where: { model_version: { _eq: $model_version } }, limit: 1) {
+      run_id
+      created_at
+    }
+  }
+`;
+
+export const ANOMALY_VERSIONS = gql`
+  query AnomalyVersions {
+    tower_anomaly_scores(
+      distinct_on: [model_version]
+      order_by: [{ model_version: desc }, { created_at: desc }]
+    ) {
+      model_version
+      run_id
+      created_at
+    }
+  }
+`;
+
+export const TOP_ANOMALIES = gql`
+  query TopAnomalies($model_version: String!, $limit: Int!, $min_percentile: Float!) {
+    tower_anomaly_scores(
+      where: {
+        model_version: { _eq: $model_version }
+        percentile: { _gte: $min_percentile }
+      }
+      order_by: { anomaly_score: desc }
+      limit: $limit
+    ) {
+      tower_id
+      anomaly_score
+      percentile
+      link_pred_error
+      neighbor_inconsistency
+      tower {
+        latitude
+        longitude
+        tower_type
+        provider_count
+        tower_providers {
+          rat
+          provider {
+            country_id
+            provider_id
+          }
+        }
+      }
+    }
+  }
+`;
+
+export const ANOMALIES_IN_BOUNDS = gql`
+  query AnomaliesInBounds(
+    $model_version: String!
+    $min_lat: Float!
+    $max_lat: Float!
+    $min_lng: Float!
+    $max_lng: Float!
+    $min_percentile: Float!
+    $limit: Int!
+  ) {
+    tower_anomaly_scores(
+      where: {
+        model_version: { _eq: $model_version }
+        percentile: { _gte: $min_percentile }
+        tower: {
+          latitude: { _gte: $min_lat, _lte: $max_lat }
+          longitude: { _gte: $min_lng, _lte: $max_lng }
+        }
+      }
+      order_by: { anomaly_score: desc }
+      limit: $limit
+    ) {
+      tower_id
+      anomaly_score
+      percentile
+      link_pred_error
+      neighbor_inconsistency
+      tower {
+        latitude
+        longitude
+        tower_type
+        provider_count
+      }
     }
   }
 `;
