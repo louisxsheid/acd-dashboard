@@ -1043,3 +1043,148 @@ export const ANOMALIES_IN_BOUNDS = gql`
     }
   }
 `;
+
+// Coverage Gap Detection queries
+export const COVERAGE_GAP_STATS = gql`
+  query CoverageGapStats($model_version: String!) {
+    coverage_gap_candidates_aggregate(where: { model_version: { _eq: $model_version } }) {
+      aggregate {
+        count
+        avg { gap_confidence gap_distance_m }
+        max { gap_confidence gap_distance_m }
+        min { gap_confidence gap_distance_m }
+      }
+    }
+    high_confidence: coverage_gap_candidates_aggregate(where: {
+      model_version: { _eq: $model_version }
+      gap_confidence: { _gte: 0.95 }
+    }) {
+      aggregate { count }
+    }
+    predicted_missing_links_aggregate(where: { model_version: { _eq: $model_version } }) {
+      aggregate {
+        count
+        avg { link_probability distance_m }
+      }
+    }
+    coverage_gap_candidates(where: { model_version: { _eq: $model_version } }, limit: 1) {
+      run_id
+      created_at
+    }
+  }
+`;
+
+export const COVERAGE_GAP_VERSIONS = gql`
+  query CoverageGapVersions {
+    coverage_gap_candidates(
+      distinct_on: [model_version]
+      order_by: [{ model_version: desc }, { created_at: desc }]
+    ) {
+      model_version
+      run_id
+      created_at
+    }
+  }
+`;
+
+export const TOP_COVERAGE_GAPS = gql`
+  query TopCoverageGaps($model_version: String!, $limit: Int!, $min_confidence: float8!) {
+    coverage_gap_candidates(
+      where: {
+        model_version: { _eq: $model_version }
+        gap_confidence: { _gte: $min_confidence }
+      }
+      order_by: { dense_anomaly_score: desc_nulls_last }
+      limit: $limit
+    ) {
+      id
+      latitude
+      longitude
+      gap_confidence
+      gap_distance_m
+      dense_anomaly_score
+      tower_a_id
+      tower_b_id
+      tower_a_lat
+      tower_a_lng
+      tower_b_lat
+      tower_b_lng
+    }
+  }
+`;
+
+export const COVERAGE_GAPS_IN_BOUNDS = gql`
+  query CoverageGapsInBounds(
+    $model_version: String!
+    $min_lat: Float!
+    $max_lat: Float!
+    $min_lng: Float!
+    $max_lng: Float!
+    $min_confidence: Float!
+    $limit: Int!
+  ) {
+    coverage_gap_candidates(
+      where: {
+        model_version: { _eq: $model_version }
+        gap_confidence: { _gte: $min_confidence }
+        latitude: { _gte: $min_lat, _lte: $max_lat }
+        longitude: { _gte: $min_lng, _lte: $max_lng }
+      }
+      order_by: { gap_confidence: desc }
+      limit: $limit
+    ) {
+      id
+      latitude
+      longitude
+      gap_confidence
+      gap_distance_m
+      tower_a_id
+      tower_b_id
+      tower_a_lat
+      tower_a_lng
+      tower_b_lat
+      tower_b_lng
+    }
+  }
+`;
+
+export const MISSING_LINKS_IN_BOUNDS = gql`
+  query MissingLinksInBounds(
+    $model_version: String!
+    $min_lat: Float!
+    $max_lat: Float!
+    $min_lng: Float!
+    $max_lng: Float!
+    $min_probability: Float!
+    $limit: Int!
+  ) {
+    predicted_missing_links(
+      where: {
+        model_version: { _eq: $model_version }
+        link_probability: { _gte: $min_probability }
+        _or: [
+          {
+            src_lat: { _gte: $min_lat, _lte: $max_lat }
+            src_lng: { _gte: $min_lng, _lte: $max_lng }
+          }
+          {
+            dst_lat: { _gte: $min_lat, _lte: $max_lat }
+            dst_lng: { _gte: $min_lng, _lte: $max_lng }
+          }
+        ]
+      }
+      order_by: { link_probability: desc }
+      limit: $limit
+    ) {
+      id
+      src_tower_id
+      dst_tower_id
+      src_lat
+      src_lng
+      dst_lat
+      dst_lng
+      distance_m
+      link_probability
+    }
+  }
+`;

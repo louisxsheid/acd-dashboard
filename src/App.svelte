@@ -21,6 +21,9 @@
     ANOMALY_STATS,
     ANOMALY_VERSIONS,
     TOP_ANOMALIES,
+    COVERAGE_GAP_STATS,
+    COVERAGE_GAP_VERSIONS,
+    TOP_COVERAGE_GAPS,
   } from "./lib/graphql/queries";
   import type { Filters } from "./lib/components/MapFilters.svelte";
   import StatCard from "./lib/components/StatCard.svelte";
@@ -35,7 +38,7 @@
   import BandFingerprinting from "./lib/components/BandFingerprinting.svelte";
   import CarrierBands from "./lib/components/CarrierBands.svelte";
   import TowersByProvider from "./lib/components/TowersByProvider.svelte";
-  import AnomalyDetection from "./lib/components/AnomalyDetection.svelte";
+  import GNNFindings from "./lib/components/GNNFindings.svelte";
   import { getCarrierName, getCarrierColorByName } from "./lib/carriers";
 
   setContextClient(client);
@@ -130,26 +133,129 @@
     loadAnomalyData();
   }
 
-  function handleAnomalyTowerClick(anomaly: any) {
-    // Switch to map view and zoom to tower location
-    activeTab = "map";
-    const lat = anomaly.tower?.latitude || anomaly.tower_latitude;
-    const lng = anomaly.tower?.longitude || anomaly.tower_longitude;
-    if (lat && lng) {
-      mapBounds = {
-        minLat: lat - 0.01,
-        maxLat: lat + 0.01,
-        minLng: lng - 0.01,
-        maxLng: lng + 0.01,
-        zoom: 15,
-      };
-      loadMapData();
+  // Coverage gap detection state
+  let coverageGapSelectedVersion = $state("gnn-link-pred-v1");
+  let coverageGapVersions: { model_version: string; run_id: string | null; created_at: string | null }[] = $state([]);
+  let coverageGapStats = $state({
+    total: 0,
+    highConfidence: 0,
+    avgConfidence: 0,
+    avgDistance: 0,
+    missingLinks: 0,
+    avgLinkProbability: 0,
+    run_id: null as string | null,
+    created_at: null as string | null,
+  });
+  let topCoverageGaps: any[] = $state([]);
+  let coverageGapLoading = $state(false);
+
+  async function loadCoverageGapVersions() {
+    console.log('[Coverage] Loading versions...');
+    try {
+      const result = await client.query(COVERAGE_GAP_VERSIONS, {}).toPromise();
+      console.log('[Coverage] Versions result:', result);
+      if (result.error) {
+        console.error('[Coverage] Versions error:', result.error);
+        return;
+      }
+      if (result.data?.coverage_gap_candidates) {
+        coverageGapVersions = result.data.coverage_gap_candidates;
+        console.log('[Coverage] Found versions:', coverageGapVersions);
+        if (coverageGapVersions.length > 0) {
+          coverageGapSelectedVersion = coverageGapVersions[0].model_version;
+          loadCoverageGapData();
+        }
+      } else {
+        console.log('[Coverage] No coverage_gap_candidates in response');
+      }
+    } catch (err) {
+      console.error('[Coverage] loadCoverageGapVersions exception:', err);
     }
   }
 
-  // Load anomaly versions on mount
+  async function loadCoverageGapData() {
+    console.log('[Coverage] Loading data for version:', coverageGapSelectedVersion);
+    coverageGapLoading = true;
+    try {
+      const [statsResult, topResult] = await Promise.all([
+        client.query(COVERAGE_GAP_STATS, { model_version: coverageGapSelectedVersion }).toPromise(),
+        client.query(TOP_COVERAGE_GAPS, {
+          model_version: coverageGapSelectedVersion,
+          limit: 50,
+          min_confidence: 0.8,
+        }).toPromise(),
+      ]);
+
+      console.log('[Coverage] Stats result:', statsResult);
+      console.log('[Coverage] Top result:', topResult);
+
+      if (statsResult.error) {
+        console.error('[Coverage] Stats error:', statsResult.error);
+      }
+      if (topResult.error) {
+        console.error('[Coverage] Top error:', topResult.error);
+      }
+
+      if (statsResult.data) {
+        const agg = statsResult.data.coverage_gap_candidates_aggregate?.aggregate || {};
+        const highConfidence = statsResult.data.high_confidence?.aggregate?.count || 0;
+        const missingLinksAgg = statsResult.data.predicted_missing_links_aggregate?.aggregate || {};
+        const meta = statsResult.data.coverage_gap_candidates?.[0] || {};
+
+        coverageGapStats = {
+          total: agg.count || 0,
+          highConfidence,
+          avgConfidence: agg.avg?.gap_confidence || 0,
+          avgDistance: agg.avg?.gap_distance_m || 0,
+          missingLinks: missingLinksAgg.count || 0,
+          avgLinkProbability: missingLinksAgg.avg?.link_probability || 0,
+          run_id: meta.run_id,
+          created_at: meta.created_at,
+        };
+        console.log('[Coverage] Stats parsed:', coverageGapStats);
+      }
+
+      if (topResult.data?.coverage_gap_candidates) {
+        topCoverageGaps = topResult.data.coverage_gap_candidates;
+        console.log('[Coverage] Top gaps loaded:', topCoverageGaps.length);
+      }
+    } catch (err) {
+      console.error('[Coverage] loadCoverageGapData exception:', err);
+    } finally {
+      coverageGapLoading = false;
+    }
+  }
+
+  function handleCoverageGapVersionChange(version: string) {
+    coverageGapSelectedVersion = version;
+    loadCoverageGapData();
+  }
+
+  function handleCoverageGapClick(gap: any) {
+    if (gap.latitude && gap.longitude) {
+      mapFlyTo = { latitude: gap.latitude, longitude: gap.longitude, zoom: 14 };
+      activeTab = "map";
+    }
+  }
+
+  // Map flyTo target for external navigation
+  let mapFlyTo: { latitude: number; longitude: number; zoom?: number } | null = $state(null);
+
+  function handleAnomalyTowerClick(anomaly: any) {
+    const lat = anomaly.tower?.latitude;
+    const lng = anomaly.tower?.longitude;
+    if (lat && lng) {
+      // Set flyTo target - this will trigger map navigation
+      mapFlyTo = { latitude: lat, longitude: lng, zoom: 15 };
+      // Switch to map view
+      activeTab = "map";
+    }
+  }
+
+  // Load anomaly and coverage gap versions on mount
   $effect(() => {
     loadAnomalyVersions();
+    loadCoverageGapVersions();
   });
 
   // Map state
@@ -885,33 +991,24 @@
         {/if}
       </section>
 
-      <!-- GNN Anomaly Detection Section -->
-      <section class="full-width-section fade-in-up delay-5">
-        {#if anomalyLoading}
-          <div class="skeleton-card">
-            <div class="skeleton-title"></div>
-            <div class="skeleton-stats-grid">
-              <div class="skeleton-stat"></div>
-              <div class="skeleton-stat"></div>
-              <div class="skeleton-stat"></div>
-              <div class="skeleton-stat"></div>
-            </div>
-          </div>
-        {:else if anomalyVersions.length > 0}
-          <AnomalyDetection
-            stats={anomalyStats}
-            topAnomalies={topAnomalies}
-            versions={anomalyVersions}
-            selectedVersion={anomalySelectedVersion}
-            onVersionChange={handleAnomalyVersionChange}
-            onTowerClick={handleAnomalyTowerClick}
-          />
-        {:else}
-          <div class="anomaly-empty">
-            <h3>GNN Anomaly Detection</h3>
-            <p>No anomaly detection data available. Run the GNN inference pipeline to generate anomaly scores.</p>
-          </div>
-        {/if}
+      <!-- GNN Findings Section -->
+      <section class="gnn-findings-section fade-in-up delay-5">
+        <GNNFindings
+          anomalyStats={anomalyStats}
+          anomalyVersions={anomalyVersions}
+          anomalySelectedVersion={anomalySelectedVersion}
+          topAnomalies={topAnomalies}
+          anomalyLoading={anomalyLoading}
+          onAnomalyVersionChange={handleAnomalyVersionChange}
+          onAnomalyClick={handleAnomalyTowerClick}
+          coverageGapStats={coverageGapStats}
+          coverageGapVersions={coverageGapVersions}
+          coverageGapSelectedVersion={coverageGapSelectedVersion}
+          topCoverageGaps={topCoverageGaps}
+          coverageGapLoading={coverageGapLoading}
+          onCoverageGapVersionChange={handleCoverageGapVersionChange}
+          onCoverageGapClick={handleCoverageGapClick}
+        />
       </section>
 
       {:else if activeTab === "map"}
@@ -929,6 +1026,9 @@
           totalCount={mapTotalCount}
           loading={mapLoading}
           filters={mapFilters}
+          flyTo={mapFlyTo}
+          coverageGaps={topCoverageGaps}
+          showCoverageGaps={coverageGapVersions.length > 0}
           onBoundsChange={handleBoundsChange}
         />
       </section>
@@ -1312,22 +1412,7 @@
     }
   }
 
-  .anomaly-empty {
-    background: #1e1e2e;
-    border-radius: 12px;
-    padding: 2rem;
-    text-align: center;
-  }
-
-  .anomaly-empty h3 {
-    margin: 0 0 0.5rem;
-    font-size: 1.25rem;
-    color: #f4f4f5;
-  }
-
-  .anomaly-empty p {
-    margin: 0;
-    color: #71717a;
-    font-size: 0.875rem;
+  .gnn-findings-section {
+    margin-bottom: 1.5rem;
   }
 </style>

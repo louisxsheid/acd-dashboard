@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { Deck } from "@deck.gl/core";
   import { HeatmapLayer } from "@deck.gl/aggregation-layers";
-  import { ScatterplotLayer } from "@deck.gl/layers";
+  import { ScatterplotLayer, LineLayer, IconLayer, PolygonLayer } from "@deck.gl/layers";
   import maplibregl from "maplibre-gl";
   import "maplibre-gl/dist/maplibre-gl.css";
 
@@ -71,12 +71,46 @@
     providerCount: "all" | "single" | "multi";
   }
 
+  interface FlyToTarget {
+    latitude: number;
+    longitude: number;
+    zoom?: number;
+  }
+
+  interface CoverageGap {
+    id: number;
+    latitude: number;
+    longitude: number;
+    gap_confidence: number;
+    gap_distance_m: number;
+    tower_a_id: number | null;
+    tower_b_id: number | null;
+    tower_a_lat: number | null;
+    tower_a_lng: number | null;
+    tower_b_lat: number | null;
+    tower_b_lng: number | null;
+  }
+
+  interface MissingLink {
+    id: number;
+    src_lat: number;
+    src_lng: number;
+    dst_lat: number;
+    dst_lng: number;
+    distance_m: number;
+    link_probability: number;
+  }
+
   interface Props {
     towers: Tower[];
     clusters: Cluster[];
     totalCount: number;
     loading: boolean;
     filters: Filters;
+    flyTo?: FlyToTarget | null;
+    coverageGaps?: CoverageGap[];
+    missingLinks?: MissingLink[];
+    showCoverageGaps?: boolean;
     onBoundsChange: (bounds: {
       minLat: number;
       maxLat: number;
@@ -86,7 +120,7 @@
     }) => void;
   }
 
-  let { towers, clusters, totalCount, loading, filters, onBoundsChange }: Props = $props();
+  let { towers, clusters, totalCount, loading, filters, flyTo = null, coverageGaps = [], missingLinks = [], showCoverageGaps = false, onBoundsChange }: Props = $props();
 
   let container: HTMLDivElement;
   let map: maplibregl.Map | null = null;
@@ -273,16 +307,230 @@
     ];
   }
 
+  // Get color based on coverage gap confidence
+  function getGapColor(confidence: number): [number, number, number, number] {
+    if (confidence >= 0.99) return [239, 68, 68, 230];   // Red - Critical
+    if (confidence >= 0.95) return [249, 115, 22, 220]; // Orange - High
+    if (confidence >= 0.90) return [245, 158, 11, 210]; // Amber - Medium
+    return [34, 197, 94, 180]; // Green - Low
+  }
+
+  // Create a circle polygon for search area visualization
+  function createCirclePolygon(lng: number, lat: number, radiusMeters: number, numSegments: number = 32): [number, number][] {
+    const points: [number, number][] = [];
+    // Convert radius to degrees (approximate)
+    const latRadius = radiusMeters / 111320; // meters per degree latitude
+    const lngRadius = radiusMeters / (111320 * Math.cos(lat * Math.PI / 180)); // adjust for longitude
+
+    for (let i = 0; i <= numSegments; i++) {
+      const angle = (i / numSegments) * 2 * Math.PI;
+      const pointLng = lng + lngRadius * Math.cos(angle);
+      const pointLat = lat + latRadius * Math.sin(angle);
+      points.push([pointLng, pointLat]);
+    }
+    return points;
+  }
+
+  // Create an ellipse polygon showing the search corridor between two towers
+  function createSearchCorridor(gap: CoverageGap): [number, number][] | null {
+    if (!gap.tower_a_lat || !gap.tower_a_lng || !gap.tower_b_lat || !gap.tower_b_lng) {
+      return null;
+    }
+
+    // Calculate the bearing between towers
+    const dx = gap.tower_b_lng - gap.tower_a_lng;
+    const dy = gap.tower_b_lat - gap.tower_a_lat;
+    const bearing = Math.atan2(dx, dy);
+
+    // Create an ellipse around the gap midpoint
+    // Major axis along the line between towers, minor axis perpendicular
+    const searchRadius = Math.min(gap.gap_distance_m * 0.25, 2000); // 25% of gap or 2km max
+    const latRadius = searchRadius / 111320;
+    const lngRadius = searchRadius / (111320 * Math.cos(gap.latitude * Math.PI / 180));
+
+    const points: [number, number][] = [];
+    const numSegments = 32;
+
+    for (let i = 0; i <= numSegments; i++) {
+      const angle = (i / numSegments) * 2 * Math.PI;
+      // Elongate along the bearing direction
+      const stretch = 1.5; // Make it 1.5x longer along the tower-to-tower axis
+      const localX = lngRadius * Math.cos(angle);
+      const localY = latRadius * Math.sin(angle) * stretch;
+
+      // Rotate by bearing
+      const rotatedX = localX * Math.cos(bearing) - localY * Math.sin(bearing);
+      const rotatedY = localX * Math.sin(bearing) + localY * Math.cos(bearing);
+
+      points.push([gap.longitude + rotatedX, gap.latitude + rotatedY]);
+    }
+
+    return points;
+  }
+
+  // Create layers for coverage gaps visualization
+  function createCoverageGapLayers(gaps: CoverageGap[], links: MissingLink[], zoom: number) {
+    const layers: any[] = [];
+
+    // Only show detailed search area when zoomed in enough (zoom >= 10)
+    const showDetailedView = zoom >= 10;
+
+    // Missing links layer - dashed lines connecting towers that should be linked
+    if (links.length > 0) {
+      layers.push(
+        new LineLayer({
+          id: "missing-links",
+          data: links,
+          getSourcePosition: (d: MissingLink) => [d.src_lng, d.src_lat],
+          getTargetPosition: (d: MissingLink) => [d.dst_lng, d.dst_lat],
+          getColor: (d: MissingLink) => {
+            const alpha = Math.min(255, Math.round(d.link_probability * 255));
+            return [249, 115, 22, alpha]; // Orange with variable opacity
+          },
+          getWidth: 2,
+          widthMinPixels: 1,
+          widthMaxPixels: 4,
+          pickable: false,
+        })
+      );
+    }
+
+    // Coverage gap visualization
+    if (gaps.length > 0) {
+      // When zoomed in: show search area polygon and connector lines
+      if (showDetailedView) {
+        // Prepare polygon data for search areas
+        const searchAreaData = gaps
+          .map(gap => {
+            const corridor = createSearchCorridor(gap);
+            if (corridor) {
+              return { gap, polygon: corridor };
+            }
+            // Fallback to circle if no tower coords available
+            const searchRadius = Math.min(gap.gap_distance_m * 0.25, 2000);
+            return { gap, polygon: createCirclePolygon(gap.longitude, gap.latitude, searchRadius) };
+          });
+
+        // Search area fill (translucent)
+        layers.push(
+          new PolygonLayer({
+            id: "coverage-gaps-search-area",
+            data: searchAreaData,
+            getPolygon: (d: { gap: CoverageGap; polygon: [number, number][] }) => d.polygon,
+            getFillColor: (d: { gap: CoverageGap; polygon: [number, number][] }) => {
+              const [r, g, b] = getGapColor(d.gap.gap_confidence);
+              return [r, g, b, 60]; // Low opacity fill
+            },
+            getLineColor: (d: { gap: CoverageGap; polygon: [number, number][] }) => {
+              const [r, g, b] = getGapColor(d.gap.gap_confidence);
+              return [r, g, b, 180]; // Higher opacity border
+            },
+            getLineWidth: 2,
+            lineWidthMinPixels: 2,
+            stroked: true,
+            filled: true,
+            pickable: false,
+            extruded: false,
+          })
+        );
+
+        // Connector lines from gap to source towers
+        const connectorData = gaps.flatMap(gap => {
+          const connectors: { gap: CoverageGap; src: [number, number]; dst: [number, number]; type: string }[] = [];
+          if (gap.tower_a_lat && gap.tower_a_lng) {
+            connectors.push({
+              gap,
+              src: [gap.longitude, gap.latitude],
+              dst: [gap.tower_a_lng, gap.tower_a_lat],
+              type: 'a'
+            });
+          }
+          if (gap.tower_b_lat && gap.tower_b_lng) {
+            connectors.push({
+              gap,
+              src: [gap.longitude, gap.latitude],
+              dst: [gap.tower_b_lng, gap.tower_b_lat],
+              type: 'b'
+            });
+          }
+          return connectors;
+        });
+
+        layers.push(
+          new LineLayer({
+            id: "coverage-gaps-connectors",
+            data: connectorData,
+            getSourcePosition: (d: { src: [number, number] }) => d.src,
+            getTargetPosition: (d: { dst: [number, number] }) => d.dst,
+            getColor: (d: { gap: CoverageGap }) => {
+              const [r, g, b] = getGapColor(d.gap.gap_confidence);
+              return [r, g, b, 140];
+            },
+            getWidth: 2,
+            widthMinPixels: 1,
+            widthMaxPixels: 3,
+            pickable: false,
+          })
+        );
+      }
+
+      // Pulsing outer ring for emphasis (visible at all zoom levels)
+      layers.push(
+        new ScatterplotLayer({
+          id: "coverage-gaps-ring",
+          data: gaps,
+          getPosition: (d: CoverageGap) => [d.longitude, d.latitude],
+          getRadius: 200,
+          getFillColor: [0, 0, 0, 0],
+          getLineColor: (d: CoverageGap) => getGapColor(d.gap_confidence),
+          getLineWidth: 2,
+          radiusMinPixels: showDetailedView ? 16 : 10,
+          radiusMaxPixels: showDetailedView ? 28 : 18,
+          lineWidthMinPixels: 2,
+          lineWidthMaxPixels: 3,
+          stroked: true,
+          filled: false,
+          pickable: false,
+        })
+      );
+
+      // Inner filled circle (center marker)
+      layers.push(
+        new ScatterplotLayer({
+          id: "coverage-gaps-points",
+          data: gaps,
+          getPosition: (d: CoverageGap) => [d.longitude, d.latitude],
+          getRadius: 100,
+          getFillColor: (d: CoverageGap) => getGapColor(d.gap_confidence),
+          radiusMinPixels: showDetailedView ? 8 : 5,
+          radiusMaxPixels: showDetailedView ? 14 : 10,
+          pickable: true,
+          stroked: false,
+        })
+      );
+    }
+
+    return layers;
+  }
+
   function createLayers(towerData: Tower[], clusterData: Cluster[], zoom: number) {
+    const layers: any[] = [];
+
     // Use cluster data as weighted heatmap when available (zoomed out)
     if (clusterData.length > 0) {
-      return createClusterHeatmapLayers(clusterData, zoom);
+      layers.push(...createClusterHeatmapLayers(clusterData, zoom));
     }
     // Use individual towers at high zoom
-    if (towerData.length > 0) {
-      return createTowerLayers(towerData, zoom);
+    else if (towerData.length > 0) {
+      layers.push(...createTowerLayers(towerData, zoom));
     }
-    return [];
+
+    // Add coverage gap layers if enabled
+    if (showCoverageGaps && (coverageGaps.length > 0 || missingLinks.length > 0)) {
+      layers.push(...createCoverageGapLayers(coverageGaps, missingLinks, zoom));
+    }
+
+    return layers;
   }
 
   function updateDeck() {
@@ -365,6 +613,65 @@
         getTooltip: ({ object }: any) => {
           if (!object) return null;
 
+          // Check if this is a coverage gap object (has gap_confidence field)
+          if ('gap_confidence' in object) {
+            const gap = object as CoverageGap;
+            const confidence = gap.gap_confidence;
+            const gapColor = getGapColor(confidence);
+            const colorHex = `rgb(${gapColor[0]}, ${gapColor[1]}, ${gapColor[2]})`;
+
+            // Determine confidence level label
+            let confidenceLabel = "Low";
+            if (confidence >= 0.99) confidenceLabel = "Critical";
+            else if (confidence >= 0.95) confidenceLabel = "High";
+            else if (confidence >= 0.90) confidenceLabel = "Medium";
+
+            // Format distance
+            const distanceM = gap.gap_distance_m;
+            const distanceStr = distanceM >= 1000
+              ? `${(distanceM / 1000).toFixed(1)} km`
+              : `${distanceM.toFixed(0)} m`;
+
+            return {
+              html: `<div style="background: #1e1e2e; color: #f4f4f5; padding: 12px 16px; border-radius: 8px; font-family: system-ui; font-size: 13px; min-width: 240px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <strong style="font-size: 14px;">Coverage Gap #${gap.id}</strong>
+                  <span style="background: ${colorHex}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">${confidenceLabel}</span>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #71717a;">Confidence</span>
+                    <span style="font-weight: 600; color: ${colorHex};">${(confidence * 100).toFixed(1)}%</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #71717a;">Gap Distance</span>
+                    <span style="font-weight: 500;">${distanceStr}</span>
+                  </div>
+                  ${gap.tower_a_id && gap.tower_b_id ? `
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #71717a;">Between Towers</span>
+                    <span style="font-weight: 500;">#${gap.tower_a_id} ↔ #${gap.tower_b_id}</span>
+                  </div>
+                  ` : ""}
+                </div>
+                <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #27273a;">
+                  <div style="font-size: 11px; color: #a1a1aa; margin-bottom: 4px;">Predicted tower location</div>
+                  <div style="font-family: monospace; font-size: 11px; color: #8b5cf6;">
+                    ${gap.latitude.toFixed(6)}, ${gap.longitude.toFixed(6)}
+                  </div>
+                </div>
+                <div style="margin-top: 8px; padding: 6px 8px; background: rgba(139, 92, 246, 0.15); border-radius: 4px; font-size: 11px; color: #c4b5fd;">
+                  GNN model predicts a tower should exist here
+                </div>
+              </div>`,
+              style: {
+                backgroundColor: "transparent",
+                border: "none",
+              },
+            };
+          }
+
+          // Otherwise it's a tower
           const tower = object as Tower;
           const providers = tower.tower_providers || [];
           const primaryProvider = providers[0];
@@ -469,17 +776,29 @@
     map?.remove();
   });
 
-  // Update layers when towers, clusters, or filters change
+  // Update layers when towers, clusters, filters, or coverage gaps change
   $effect(() => {
     const towerData = filteredTowers();
     const clusterData = clusters;
+    const gapsData = coverageGaps;
+    const linksData = missingLinks;
+    const showGaps = showCoverageGaps;
     const ready = mapReady;
-    console.log('DeckGL effect triggered - clusters:', clusterData.length, 'towers:', towerData.length, 'zoom:', currentZoom, 'ready:', ready);
-    if (clusterData.length > 0) {
-      console.log('Sample cluster:', clusterData[0]);
-    }
+    console.log('DeckGL effect triggered - clusters:', clusterData.length, 'towers:', towerData.length, 'gaps:', gapsData.length, 'showGaps:', showGaps, 'ready:', ready);
     if (ready) {
       updateDeck();
+    }
+  });
+
+  // Handle flyTo prop changes
+  $effect(() => {
+    if (flyTo && map && mapReady) {
+      console.log('Flying to:', flyTo);
+      map.flyTo({
+        center: [flyTo.longitude, flyTo.latitude],
+        zoom: flyTo.zoom ?? 15,
+        duration: 1500,
+      });
     }
   });
 
@@ -542,6 +861,25 @@
         <div class="legend-item">
           <span class="legend-dot endc"></span> EN-DC
         </div>
+      {/if}
+      {#if showCoverageGaps && coverageGaps.length > 0}
+        <div class="legend-divider"></div>
+        <div class="legend-title">Coverage Gaps</div>
+        <div class="legend-item">
+          <span class="legend-dot gap-dot" style="background: rgb(239, 68, 68)"></span> Critical (99%+)
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot gap-dot" style="background: rgb(249, 115, 22)"></span> High (95%+)
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot gap-dot" style="background: rgb(245, 158, 11)"></span> Medium (90%+)
+        </div>
+        <div class="legend-count">{coverageGaps.length} gap candidates</div>
+        {#if currentZoom >= 10}
+          <div class="legend-note">Search area shown</div>
+        {:else}
+          <div class="legend-hint-small">Zoom in for search area</div>
+        {/if}
       {/if}
       <div class="legend-divider"></div>
       <div class="legend-hint">
@@ -667,6 +1005,30 @@
     border: 2px solid white;
     width: 8px;
     height: 8px;
+  }
+
+  .legend-dot.gap-dot {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.3);
+  }
+
+  .legend-count {
+    font-size: 0.65rem;
+    color: #71717a;
+    margin-top: 0.25rem;
+  }
+
+  .legend-note {
+    font-size: 0.65rem;
+    color: #8b5cf6;
+    margin-top: 0.25rem;
+    font-weight: 500;
+  }
+
+  .legend-hint-small {
+    font-size: 0.6rem;
+    color: #52525b;
+    margin-top: 0.25rem;
+    font-style: italic;
   }
 
   .legend-divider {
